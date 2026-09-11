@@ -117,6 +117,8 @@ async fn route(wr: &mut OwnedWriteHalf, req: &Request, state: &ServerState) -> R
         ["hls", "aes"] => serve_hls_aes(wr, req).await,
         ["hls", "media"] => serve_hls_media(wr, req).await,
         ["hls", "drm"] => serve_hls_drm(wr, req).await,
+        // `seg-init` / `seg-0` без крапки не відкидаються `path_segments`.
+        ["dash", "vod"] | ["dash", "vod", _] => serve_dash_vod(wr, req).await,
         _ => {
             // Гучно: мовчазна 404 у тестовому стенді — це години пошуку
             // «чому рушій качає 9 байтів».
@@ -124,7 +126,7 @@ async fn route(wr: &mut OwnedWriteHalf, req: &Request, state: &ServerState) -> R
                 "невідомий сценарій: target={:?}, сегменти={:?}. \
                  Доступні: /plain /norange /cut /flaky /changing /liar-length \
                  /gzip /slow /slow-range /redirect /auth /disposition /head-only /no-head \
-                 /hls/vod /hls/live /hls/media /hls/drm",
+                 /hls/vod /hls/live /hls/media /hls/drm /dash/vod",
                 req.target, segs
             );
             tracing::warn!("{msg}");
@@ -795,6 +797,76 @@ async fn serve_hls_media(wr: &mut OwnedWriteHalf, req: &Request) -> Result<()> {
         "seg1.ts" => serve_bytes(wr, req, "video/mp2t", HLS_SEG1).await,
         other => {
             let msg = format!("невідомий HLS media файл: {other}");
+            serve_status(wr, 404, &[], msg.as_bytes()).await
+        }
+    }
+}
+
+const DASH_VOD_MPD: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<MPD xmlns="urn:mpeg:dash:schema:mpd:2011" type="static" mediaPresentationDuration="PT8S" minBufferTime="PT1S" profiles="urn:mpeg:dash:profile:isoff-on-demand:2011">
+  <Period duration="PT8S">
+    <AdaptationSet mimeType="video/mp4" contentType="video">
+      <Representation id="360" bandwidth="800000" width="640" height="360">
+        <SegmentList timescale="1" duration="4">
+          <Initialization sourceURL="seg-init"/>
+          <SegmentURL media="seg-0"/>
+          <SegmentURL media="seg-1"/>
+        </SegmentList>
+      </Representation>
+      <Representation id="720" bandwidth="2000000" width="1280" height="720">
+        <SegmentList timescale="1" duration="4">
+          <Initialization sourceURL="seg-init"/>
+          <SegmentURL media="seg-0"/>
+          <SegmentURL media="seg-1"/>
+        </SegmentList>
+      </Representation>
+    </AdaptationSet>
+  </Period>
+</MPD>
+"#;
+
+const DASH_DRM_MPD: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<MPD xmlns="urn:mpeg:dash:schema:mpd:2011" xmlns:cenc="urn:mpeg:cenc:2013" type="static" mediaPresentationDuration="PT4S" minBufferTime="PT1S" profiles="urn:mpeg:dash:profile:isoff-on-demand:2011">
+  <Period>
+    <AdaptationSet mimeType="video/mp4" contentType="video">
+      <ContentProtection schemeIdUri="urn:uuid:edef8ba9-79d6-4ace-a3c8-27dcd51d21ed" value="Widevine"/>
+      <Representation id="1" bandwidth="1000000" height="720">
+        <SegmentList timescale="1" duration="4">
+          <Initialization sourceURL="seg-init"/>
+          <SegmentURL media="seg-0"/>
+        </SegmentList>
+      </Representation>
+    </AdaptationSet>
+  </Period>
+</MPD>
+"#;
+
+const DASH_LIVE_MPD: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<MPD xmlns="urn:mpeg:dash:schema:mpd:2011" type="dynamic" minimumUpdatePeriod="PT5S" minBufferTime="PT1S" profiles="urn:mpeg:dash:profile:isoff-live:2011">
+  <Period>
+    <AdaptationSet mimeType="video/mp4" contentType="video">
+      <Representation id="1" bandwidth="1000000" height="720">
+        <SegmentTemplate media="live-$Number$.m4s" timescale="1" duration="2" startNumber="1"/>
+      </Representation>
+    </AdaptationSet>
+  </Period>
+</MPD>
+"#;
+
+const DASH_INIT: &[u8] = b"INIT-PAYLOAD-DASH-AAAAAAAAAA";
+
+async fn serve_dash_vod(wr: &mut OwnedWriteHalf, req: &Request) -> Result<()> {
+    match hls_імʼя(req) {
+        "manifest.mpd" => {
+            serve_bytes(wr, req, "application/dash+xml", DASH_VOD_MPD.as_bytes()).await
+        }
+        "drm.mpd" => serve_bytes(wr, req, "application/dash+xml", DASH_DRM_MPD.as_bytes()).await,
+        "live.mpd" => serve_bytes(wr, req, "application/dash+xml", DASH_LIVE_MPD.as_bytes()).await,
+        "seg-init" => serve_bytes(wr, req, "video/mp4", DASH_INIT).await,
+        "seg-0" => serve_bytes(wr, req, "video/mp4", HLS_SEG0).await,
+        "seg-1" => serve_bytes(wr, req, "video/mp4", HLS_SEG1).await,
+        other => {
+            let msg = format!("невідомий DASH vod файл: {other}");
             serve_status(wr, 404, &[], msg.as_bytes()).await
         }
     }

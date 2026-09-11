@@ -586,7 +586,8 @@ async fn url_та_невідомий_сценарій() -> Result<()> {
         tekst.contains("невідомий сценарій")
             && tekst.contains("/plain")
             && tekst.contains("/hls/media")
-            && tekst.contains("/hls/drm"),
+            && tekst.contains("/hls/drm")
+            && tekst.contains("/dash/vod"),
         "404 має гучно перелічити доступні сценарії, а не мовчати: {tekst}"
     );
 
@@ -710,6 +711,45 @@ async fn hls_drm_містить_keyformat_і_sample_aes() -> Result<()> {
     assert!(
         String::from_utf8_lossy(&key.body).contains("невідомий HLS drm файл"),
         "невідомий файл — 404 з текстом як у інших hls_*"
+    );
+
+    s.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn dash_vod_віддає_маніфест_і_сегменти() -> Result<()> {
+    let s = EvilServer::start().await?;
+    let a = s.addr();
+
+    let mpd = get(a, "/dash/vod/manifest.mpd").await?;
+    assert_eq!(mpd.status, 200);
+    let tekst = String::from_utf8_lossy(&mpd.body);
+    assert!(
+        tekst.contains("MPD") && tekst.contains("seg-init") && tekst.contains("seg-0"),
+        "VOD MPD має містити init і сегменти: {tekst}"
+    );
+
+    let init = get(a, "/dash/vod/seg-init").await?;
+    assert_eq!(init.status, 200);
+    assert_eq!(&init.body, b"INIT-PAYLOAD-DASH-AAAAAAAAAA");
+
+    let seg0 = get(a, "/dash/vod/seg-0").await?;
+    assert_eq!(seg0.status, 200);
+    assert_eq!(&seg0.body, b"SEG0-PAYLOAD-AAAAAAAAAAAAAAAA");
+
+    let drm = get(a, "/dash/vod/drm.mpd").await?;
+    assert_eq!(drm.status, 200);
+    assert!(
+        String::from_utf8_lossy(&drm.body).contains("Widevine"),
+        "DRM-маніфест має містити Widevine"
+    );
+
+    let live = get(a, "/dash/vod/live.mpd").await?;
+    assert_eq!(live.status, 200);
+    assert!(
+        String::from_utf8_lossy(&live.body).contains("dynamic"),
+        "live MPD має бути type=dynamic"
     );
 
     s.shutdown().await;

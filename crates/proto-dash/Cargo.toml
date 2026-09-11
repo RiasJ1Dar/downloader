@@ -1,0 +1,29 @@
+[package]
+name = "downloader-proto-dash"
+description = "Протокол DASH VOD: MPD, вибір representation, зшивання сегментів"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+downloader-core.workspace = true
+downloader-proto-http.workspace = true
+async-trait.workspace = true
+reqwest.workspace = true
+tokio = { workspace = true, features = ["rt", "time", "macros", "sync"] }
+tracing.workspace = true
+dash-mpd.workspace = true
+
+[dev-dependencies]
+downloader-testserver.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+sha2.workspace = true
+
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"

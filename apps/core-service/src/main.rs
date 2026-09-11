@@ -87,11 +87,12 @@ async fn main() -> anyhow::Result<()> {
     // створити модуль самостійно — саме це й тримає межу, про яку йдеться
     // в `crates/core/src/protocol.rs`.
     //
-    // Порядок важливий: спеціалізовані модулі (HLS, торент) реєструються
+    // Порядок важливий: спеціалізовані модулі (HLS, DASH, торент) реєструються
     // перед загальним HTTP, інакше HTTP забирав би собі все, що починається
     // з `https://`, включно з посиланнями на маніфести.
     let mut registry = downloader_core::protocol::Registry::new();
     registry.register(Box::new(downloader_proto_hls::HlsProtocol::new()?));
+    registry.register(Box::new(downloader_proto_dash::DashProtocol::new()?));
     registry.register(Box::new(downloader_proto_http::HttpProtocol::new(8)?));
 
     let engine = engine::Engine::new(&db, downloads.clone(), registry)?;
