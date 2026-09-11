@@ -14,12 +14,12 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
+use downloader_ipc::protocol::{Event, Request, Response};
 use downloader_proto_http::download::{Options, download_with_probe};
 use downloader_proto_http::probe::probe;
-use downloader_ipc::protocol::{Event, Request, Response};
 use downloader_winutil::{motw, names, paths};
 
-#[derive(Parser)]
+#[derive(Parser, Debug)]
 #[command(
     name = "dl",
     version,
@@ -30,7 +30,7 @@ struct Cli {
     command: Command,
 }
 
-#[derive(Subcommand)]
+#[derive(Subcommand, Debug)]
 enum Command {
     /// Завантажити файл.
     Get {
@@ -85,6 +85,28 @@ enum Command {
     /// Показати завдання ядра.
     List,
 
+    /// Зупинити завдання ядра.
+    Pause {
+        /// Ідентифікатор зі `dl list`.
+        id: i64,
+    },
+
+    /// Продовжити зупинене завдання.
+    Resume {
+        /// Ідентифікатор зі `dl list`.
+        id: i64,
+    },
+
+    /// Прибрати завдання зі списку ядра.
+    Rm {
+        /// Ідентифікатор зі `dl list`.
+        id: i64,
+
+        /// Видалити вже завантажені байти з диска.
+        #[arg(long)]
+        with_file: bool,
+    },
+
     /// Стежити за прогресом, доки не натиснуто Ctrl+C.
     Watch,
 }
@@ -93,8 +115,7 @@ enum Command {
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info".into()),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
         )
         .with_writer(std::io::stderr)
         .init();
@@ -154,6 +175,28 @@ async fn main() -> Result<()> {
             }
         }
 
+        Command::Pause { id } => {
+            let mut core = client::Client::connect().await?;
+            core.call_ok(&Request::Pause { id }).await?;
+            println!("завдання {id} зупиняється");
+        }
+
+        Command::Resume { id } => {
+            let mut core = client::Client::connect().await?;
+            core.call_ok(&Request::Resume { id }).await?;
+            println!("завдання {id} продовжено");
+        }
+
+        Command::Rm { id, with_file } => {
+            let mut core = client::Client::connect().await?;
+            core.call_ok(&Request::Remove { id, with_file }).await?;
+            if with_file {
+                println!("завдання {id} прибрано разом із файлом");
+            } else {
+                println!("завдання {id} прибрано зі списку");
+            }
+        }
+
         Command::Watch => {
             let core = client::Client::connect().await?;
             let mut events = core.subscribe().await?;
@@ -199,7 +242,8 @@ async fn main() -> Result<()> {
             println!("адреса:      {}", info.final_url);
             println!(
                 "розмір:      {}",
-                info.size.map_or_else(|| "невідомий".to_owned(), format_size)
+                info.size
+                    .map_or_else(|| "невідомий".to_owned(), format_size)
             );
             println!(
                 "сегменти:    {}",
@@ -231,7 +275,9 @@ async fn main() -> Result<()> {
             let dest = match out {
                 Some(p) => p,
                 None => {
-                    let raw = info.filename().unwrap_or_else(|| names::ЗАПАСНЕ_ІМʼЯ.to_owned());
+                    let raw = info
+                        .filename()
+                        .unwrap_or_else(|| names::ЗАПАСНЕ_ІМʼЯ.to_owned());
                     let safe = names::sanitize(&raw);
                     if safe != raw {
                         println!("ім'я з сервера знешкоджено: {raw:?} → {safe:?}");
@@ -252,7 +298,8 @@ async fn main() -> Result<()> {
                 "качаю {} → {} ({}, {} потоків)",
                 info.final_url,
                 dest.display(),
-                info.size.map_or_else(|| "розмір невідомий".to_owned(), format_size),
+                info.size
+                    .map_or_else(|| "розмір невідомий".to_owned(), format_size),
                 info.usable_parts(parts)
             );
 
@@ -304,5 +351,50 @@ fn format_size(bytes: u64) -> String {
         format!("{bytes} {}", ОДИНИЦІ[unit])
     } else {
         format!("{value:.1} {}", ОДИНИЦІ[unit])
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::CommandFactory;
+
+    #[test]
+    fn clap_розбирає_pause_resume_rm() {
+        Cli::command().debug_assert();
+
+        match Cli::try_parse_from(["dl", "pause", "7"]).expect("pause") {
+            Cli {
+                command: Command::Pause { id },
+            } => assert_eq!(id, 7),
+            other => panic!("не pause: {other:?}"),
+        }
+
+        match Cli::try_parse_from(["dl", "resume", "7"]).expect("resume") {
+            Cli {
+                command: Command::Resume { id },
+            } => assert_eq!(id, 7),
+            other => panic!("не resume: {other:?}"),
+        }
+
+        match Cli::try_parse_from(["dl", "rm", "7", "--with-file"]).expect("rm") {
+            Cli {
+                command: Command::Rm { id, with_file },
+            } => {
+                assert_eq!(id, 7);
+                assert!(with_file);
+            }
+            other => panic!("не rm: {other:?}"),
+        }
+
+        match Cli::try_parse_from(["dl", "rm", "3"]).expect("rm без файла") {
+            Cli {
+                command: Command::Rm { id, with_file },
+            } => {
+                assert_eq!(id, 3);
+                assert!(!with_file);
+            }
+            other => panic!("не rm: {other:?}"),
+        }
     }
 }

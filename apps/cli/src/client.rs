@@ -67,6 +67,17 @@ impl Client {
         Ok(read_frame(&mut self.stream).await?)
     }
 
+    /// Надіслати запит, на який ядро відповідає «зроблено».
+    ///
+    /// Помилка ядра стає `bail` з її текстом — так само, як у `Add`.
+    pub async fn call_ok(&mut self, req: &Request) -> Result<()> {
+        match self.call(req).await? {
+            Response::Ok => Ok(()),
+            Response::Error { message, .. } => anyhow::bail!(message),
+            other => anyhow::bail!("несподівана відповідь ядра: {other:?}"),
+        }
+    }
+
     /// Перетворити з'єднання на потік подій.
     ///
     /// Після цього запитів слати не можна — з'єднання належить подіям.
