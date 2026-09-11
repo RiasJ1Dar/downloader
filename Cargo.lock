@@ -375,6 +375,7 @@ dependencies = [
  "clap",
  "downloader-core",
  "downloader-ipc",
+ "downloader-proto-hls",
  "downloader-proto-http",
  "downloader-testserver",
  "downloader-winutil",

@@ -19,10 +19,12 @@
 //! на цьому захлинається будь-який UI.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use downloader_core::protocol::{Cancel, Progress, ProgressSink, Registry, RunContext};
+use downloader_core::protocol::{
+    Cancel, PlannedFile, Progress, ProgressSink, Registry, RunContext,
+};
 use downloader_core::store::{NewFile, NewTask, Status, Store};
 use downloader_ipc::protocol::{Event, TaskView};
 use downloader_winutil::{motw, names, paths};
@@ -178,7 +180,7 @@ impl Engine {
 
         let mut out: Vec<TaskView> = live.values().map(Live::to_view).collect();
         // Найновіші зверху — так само, як у базі.
-        out.sort_by(|a, b| b.id.cmp(&a.id));
+        out.sort_by_key(|b| std::cmp::Reverse(b.id));
         out
     }
 
@@ -203,20 +205,16 @@ impl Engine {
         // нічого не відомо — ні розміру, ні імені, ні чи воно взагалі існує.
         let probed = protocol.probe(url).await?;
 
-        let Some(first) = probed.files.first() else {
+        if probed.files.is_empty() {
             anyhow::bail!("модуль {protocol_name} не назвав жодного файла для {url}");
-        };
+        }
 
-        let dest = match dest {
-            Some(p) => p,
-            None => {
-                // Ім'я склала стороння людина — знешкоджуємо, тоді розводимо
-                // збіги. Це робота ядра, а не модуля: правила файлової
-                // системи однакові для всіх протоколів.
-                let safe = names::sanitize(&first.suggested_name);
-                paths::unique_path(&self.downloads_dir.join(safe))
-            }
-        };
+        let planned = paths_for_selected(&probed.files, dest.as_deref(), &self.downloads_dir);
+        if planned.is_empty() {
+            anyhow::bail!("модуль {protocol_name} не обрав жодного файла для {url}");
+        }
+
+        let targets: Vec<PathBuf> = planned.iter().map(|(p, _)| p.clone()).collect();
 
         let id = {
             let mut store = self
@@ -229,17 +227,21 @@ impl Engine {
                 protocol: protocol_name.clone(),
                 title: None,
                 category_id: None,
-                files: vec![NewFile {
-                    path: dest.clone(),
-                    size: first.size,
-                    fingerprint: probed.fingerprint.clone(),
-                    selected: true,
-                }],
+                files: planned
+                    .iter()
+                    .map(|(path, size)| NewFile {
+                        path: path.clone(),
+                        size: *size,
+                        fingerprint: probed.fingerprint.clone(),
+                        selected: true,
+                    })
+                    .collect(),
             })?
         };
 
-        let name = dest
-            .file_name()
+        let name = targets
+            .first()
+            .and_then(|p| p.file_name())
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_else(|| names::ЗАПАСНЕ_ІМʼЯ.to_owned());
 
@@ -263,12 +265,18 @@ impl Engine {
 
         self.set_status(id, Status::Running, None);
         self.clone()
-            .spawn_download(id, protocol_name, probed.final_url, dest);
+            .spawn_download(id, protocol_name, probed.final_url, targets);
         Ok(id)
     }
 
     /// Запустити качання окремою задачею.
-    fn spawn_download(self: Arc<Self>, id: i64, protocol: String, source: String, dest: PathBuf) {
+    fn spawn_download(
+        self: Arc<Self>,
+        id: i64,
+        protocol: String,
+        source: String,
+        targets: Vec<PathBuf>,
+    ) {
         tokio::spawn(async move {
             let Some(module) = self.registry.by_name(&protocol) else {
                 let message = format!("модуль {protocol} зник із реєстру");
@@ -289,7 +297,7 @@ impl Engine {
             let ctx = RunContext {
                 task_id: id,
                 source,
-                targets: vec![dest.clone()],
+                targets,
                 resume: None,
                 cancel,
             };
@@ -320,11 +328,12 @@ impl Engine {
                     }
 
                     let bytes = self.finish(id);
-                    let _ = self.events.send(Event::Finished {
-                        id,
-                        path: dest.display().to_string(),
-                        bytes,
-                    });
+                    let path = ctx
+                        .targets
+                        .first()
+                        .map(|p| p.display().to_string())
+                        .unwrap_or_default();
+                    let _ = self.events.send(Event::Finished { id, path, bytes });
                 }
 
                 Err(e) => self.fail(id, &e.to_string()),
@@ -352,7 +361,7 @@ impl Engine {
 
     /// Продовжити зупинене завдання.
     pub async fn resume(self: &Arc<Self>, id: i64) -> anyhow::Result<()> {
-        let (url, protocol, dest) = {
+        let (url, protocol, targets) = {
             let store = self
                 .store
                 .lock()
@@ -363,12 +372,12 @@ impl Engine {
                 .ok_or_else(|| anyhow::anyhow!("завдання {id} не знайдено"))?;
 
             let files = store.files(id)?;
-            let dest = files
-                .first()
-                .map(|f| f.path.clone())
-                .ok_or_else(|| anyhow::anyhow!("у завдання {id} немає файлів"))?;
+            let targets: Vec<PathBuf> = files.iter().map(|f| f.path.clone()).collect();
+            if targets.is_empty() {
+                anyhow::bail!("у завдання {id} немає файлів");
+            }
 
-            (task.url, task.protocol, dest)
+            (task.url, task.protocol, targets)
         };
 
         if let Ok(mut live) = self.live.lock()
@@ -379,7 +388,7 @@ impl Engine {
         }
 
         self.set_status(id, Status::Running, None);
-        self.clone().spawn_download(id, protocol, url, dest);
+        self.clone().spawn_download(id, protocol, url, targets);
         Ok(())
     }
 
@@ -532,5 +541,152 @@ impl Engine {
                 });
             }
         });
+    }
+}
+
+/// Шляхи для файлів із `selected == true`.
+///
+/// Якщо людина дала `dest` і обраний рівно один файл — беремо `dest` як є.
+/// Якщо обраних кілька — `dest` це перший, решта з `suggested_name` у тій
+/// самій теці. Необрані сюди не потрапляють і в базу не пишуться.
+fn paths_for_selected(
+    files: &[PlannedFile],
+    dest: Option<&Path>,
+    downloads_dir: &Path,
+) -> Vec<(PathBuf, Option<u64>)> {
+    let mut reserved = Vec::new();
+    let mut out = Vec::new();
+
+    for (i, file) in files.iter().filter(|f| f.selected).enumerate() {
+        let path = match dest {
+            Some(given) if i == 0 => given.to_path_buf(),
+            Some(given) => {
+                let dir = match given.parent() {
+                    Some(p) if !p.as_os_str().is_empty() => p,
+                    _ => downloads_dir,
+                };
+                let safe = names::sanitize(&file.suggested_name);
+                unique_among(&dir.join(safe), &reserved)
+            }
+            None => {
+                let safe = names::sanitize(&file.suggested_name);
+                unique_among(&downloads_dir.join(safe), &reserved)
+            }
+        };
+        reserved.push(path.clone());
+        out.push((path, file.size));
+    }
+    out
+}
+
+/// `unique_path` дивиться лише диск; уже призначені шляхи можуть ще не існувати.
+fn unique_among(desired: &Path, reserved: &[PathBuf]) -> PathBuf {
+    let candidate = paths::unique_path(desired);
+    if !reserved.contains(&candidate) {
+        return candidate;
+    }
+
+    let parent = desired.parent().unwrap_or_else(|| Path::new("."));
+    let name = desired
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| names::ЗАПАСНЕ_ІМʼЯ.to_owned());
+    let (stem, ext) = match name.rsplit_once('.') {
+        Some((s, e)) if !s.is_empty() && !e.is_empty() => (s.to_owned(), Some(e.to_owned())),
+        _ => (name, None),
+    };
+
+    for n in 1..=1000 {
+        let next = match &ext {
+            Some(e) => parent.join(format!("{stem} ({n}).{e}")),
+            None => parent.join(format!("{stem} ({n})")),
+        };
+        let unique = paths::unique_path(&next);
+        if !reserved.contains(&unique) {
+            return unique;
+        }
+    }
+
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    match ext {
+        Some(e) => parent.join(format!("{stem} ({stamp}).{e}")),
+        None => parent.join(format!("{stem} ({stamp})")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn file(name: &str, selected: bool) -> PlannedFile {
+        PlannedFile {
+            suggested_name: name.to_owned(),
+            size: Some(1),
+            selected,
+        }
+    }
+
+    fn absent_dir(tag: &str) -> PathBuf {
+        std::env::temp_dir().join(format!("dl-e10-absent-{tag}"))
+    }
+
+    #[test]
+    fn без_dest_лише_selected() {
+        let dir = absent_dir("downloads");
+        let files = vec![
+            file("video.ts", true),
+            file("audio-en.m3u8", true),
+            file("subs-en.vtt", false),
+        ];
+        let out = paths_for_selected(&files, None, &dir);
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].0, dir.join("video.ts"));
+        assert_eq!(out[1].0, dir.join("audio-en.m3u8"));
+    }
+
+    #[test]
+    fn dest_на_один_файл_йде_як_є() {
+        let dir = absent_dir("one");
+        let dest = dir.join("готове.bin");
+        let files = vec![file("a.bin", true), file("b.bin", false)];
+        let out = paths_for_selected(&files, Some(&dest), &dir);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].0, dest);
+    }
+
+    #[test]
+    fn dest_на_кілька_перший_це_dest_решта_поруч() {
+        let dir = absent_dir("movie-dir");
+        let dest = dir.join("movie.ts");
+        let files = vec![
+            file("720p.ts", true),
+            file("audio-en.m3u8", true),
+            file("subs-en.vtt", false),
+        ];
+        let out = paths_for_selected(&files, Some(&dest), &dir);
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].0, dest);
+        assert_eq!(out[1].0, dir.join("audio-en.m3u8"));
+    }
+
+    #[test]
+    fn однакові_suggested_name_розводяться() {
+        let dir = absent_dir("dup");
+        let files = vec![file("a.bin", true), file("a.bin", true)];
+        let out = paths_for_selected(&files, None, &dir);
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].0, dir.join("a.bin"));
+        assert_eq!(out[1].0, dir.join("a (1).bin"));
+    }
+
+    #[test]
+    fn жоден_selected_не_дає_шляхів() {
+        let dir = absent_dir("empty");
+        let files = vec![file("a.bin", false), file("b.bin", false)];
+        let out = paths_for_selected(&files, None, &dir);
+        assert!(out.is_empty());
     }
 }

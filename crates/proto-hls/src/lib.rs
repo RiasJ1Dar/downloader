@@ -105,21 +105,88 @@ impl Protocol for HlsProtocol {
     }
 
     async fn run(&self, ctx: RunContext, sink: &dyn ProgressSink) -> Result<Option<ResumeBlob>> {
-        let Some(dest) = ctx.targets.first() else {
+        if ctx.targets.is_empty() {
             return Err(Error::Store(
                 "ядро не дало жодного шляху для запису".to_owned(),
             ));
-        };
-        let (медіа, playlist_url) = розібрати_медіа(&self.client, &ctx.source, dest).await?;
-        if !медіа.end_list {
-            return self
-                .тягнути_live(&playlist_url, медіа, dest, sink, &ctx.cancel)
-                .await;
         }
-        if медіа.сегменти.is_empty() {
-            return Err(Error::Store("media playlist без сегментів".to_owned()));
+        let body = fetch_text(&self.client, &ctx.source).await?;
+        let доріжки = розібрати_доріжки(body.as_bytes(), &ctx.source)?;
+        // Якість — з першої відео-цілі, не audio-*/subs-*. Якщо всі targets
+        // доріжки, відео з master не пишемо (немає куди), варіант не обираємо.
+        let video_dest = ctx.targets.iter().find(|p| !це_імʼя_доріжки(p));
+        let mut done = 0u64;
+
+        match розібрати(body.as_bytes(), &ctx.source)? {
+            Маніфест::Media(m) => {
+                if !m.end_list {
+                    let Some(dest) = video_dest else {
+                        tracing::warn!(
+                            "HLS live: немає відео-цілі, додаткові доріжки цей цикл не качаємо"
+                        );
+                        return Ok(None);
+                    };
+                    return self
+                        .тягнути_live(&ctx.source, m, dest, sink, &ctx.cancel)
+                        .await;
+                }
+                if let Some(dest) = video_dest {
+                    if m.сегменти.is_empty() {
+                        return Err(Error::Store("media playlist без сегментів".to_owned()));
+                    }
+                    if let Some(blob) = self
+                        .тягнути_сегменти(&m.сегменти, dest, sink, &ctx.cancel, &mut done)
+                        .await?
+                    {
+                        return Ok(Some(blob));
+                    }
+                }
+            }
+            Маніфест::Master { mut варіанти } => {
+                варіанти.sort_by_key(|v| v.bandwidth);
+                if let Some(dest) = video_dest {
+                    let обраний = обрати_варіант(&варіанти, dest)?;
+                    let media_txt = fetch_text(&self.client, &обраний.uri).await?;
+                    match розібрати(media_txt.as_bytes(), &обраний.uri)? {
+                        Маніфест::Media(m) => {
+                            if !m.end_list {
+                                return self
+                                    .тягнути_live(&обраний.uri, m, dest, sink, &ctx.cancel)
+                                    .await;
+                            }
+                            if m.сегменти.is_empty() {
+                                return Err(Error::Store(
+                                    "media playlist без сегментів".to_owned(),
+                                ));
+                            }
+                            if let Some(blob) = self
+                                .тягнути_сегменти(
+                                    &m.сегменти,
+                                    dest,
+                                    sink,
+                                    &ctx.cancel,
+                                    &mut done,
+                                )
+                                .await?
+                            {
+                                return Ok(Some(blob));
+                            }
+                        }
+                        Маніфест::Master { .. } => {
+                            return Err(Error::Store(
+                                "варіант master вказує знову на master".to_owned(),
+                            ));
+                        }
+                    }
+                } else {
+                    tracing::warn!(
+                        "усі targets — доріжки; відео з master не пишемо (немає відео-цілі)"
+                    );
+                }
+            }
         }
-        self.тягнути_сегменти(&медіа.сегменти, dest, sink, &ctx.cancel)
+
+        self.тягнути_додаткові(&ctx.targets, &доріжки, sink, &ctx.cancel, &mut done)
             .await
     }
 
@@ -220,6 +287,7 @@ impl HlsProtocol {
         dest: &Path,
         sink: &dyn ProgressSink,
         cancel: &Cancel,
+        done: &mut u64,
     ) -> Result<Option<ResumeBlob>> {
         if сегменти.iter().any(|s| s.discontinuity) {
             tracing::warn!("EXT-X-DISCONTINUITY: склейка може мати зламані таймстемпи");
@@ -230,7 +298,6 @@ impl HlsProtocol {
         let tmp = dest.with_extension("hls-parts");
         std::fs::create_dir_all(&tmp)?;
         let mut зібрані = Vec::new();
-        let mut done = 0u64;
         let mut next_offset = 0u64;
         let ліміт = self.rate_limit.lock().map(|g| *g).unwrap_or(0);
         for (i, seg) in сегменти.iter().enumerate() {
@@ -239,16 +306,99 @@ impl HlsProtocol {
             }
             let part = tmp.join(format!("seg-{i}.bin"));
             let bytes = качати_сегмент(&self.client, seg, &part, ліміт, &mut next_offset).await?;
-            done += bytes.len() as u64;
-            sink.report(Progress::Advanced { done });
+            *done = done.saturating_add(bytes.len() as u64);
+            sink.report(Progress::Advanced { done: *done });
             зібрані.push(part);
         }
-        sink.report(Progress::TotalKnown { total: done });
+        sink.report(Progress::TotalKnown { total: *done });
         зшити_або_mp4(&зібрані, dest, сегменти.iter().any(|s| s.discontinuity))?;
         if let Err(e) = std::fs::remove_dir_all(&tmp) {
             tracing::warn!("не прибрати тимчасові сегменти HLS: {e}");
         }
         Ok(None)
+    }
+
+    /// audio-* як media playlist; subs .vtt — GET; subs .m3u8 — як медіа.
+    /// Без URI — warn, не Err. Live-доріжка — GAP.
+    async fn тягнути_додаткові(
+        &self,
+        targets: &[PathBuf],
+        доріжки: &[Доріжка],
+        sink: &dyn ProgressSink,
+        cancel: &Cancel,
+        done: &mut u64,
+    ) -> Result<Option<ResumeBlob>> {
+        for dest in targets {
+            if !це_імʼя_доріжки(dest) {
+                continue;
+            }
+            if cancel.is_cancelled() {
+                return Ok(Some(Vec::new()));
+            }
+            let Some(d) = знайти_доріжку(доріжки, dest) else {
+                tracing::warn!("немає доріжки в master для {}", dest.display());
+                continue;
+            };
+            let Some(uri) = d.uri.as_deref() else {
+                tracing::warn!("доріжка {} без URI, пропускаємо", dest.display());
+                continue;
+            };
+            match d.kind {
+                ТипДоріжки::Audio => {
+                    if let Some(blob) = self
+                        .качати_vod_доріжку(uri, dest, sink, cancel, done)
+                        .await?
+                    {
+                        return Ok(Some(blob));
+                    }
+                }
+                ТипДоріжки::Subtitles => {
+                    if схожий_на_hls(uri) {
+                        if let Some(blob) = self
+                            .качати_vod_доріжку(uri, dest, sink, cancel, done)
+                            .await?
+                        {
+                            return Ok(Some(blob));
+                        }
+                    } else {
+                        let bytes = fetch_bytes(&self.client, uri).await?;
+                        std::fs::write(dest, &bytes)?;
+                        *done = done.saturating_add(bytes.len() as u64);
+                        sink.report(Progress::Advanced { done: *done });
+                        sink.report(Progress::TotalKnown { total: *done });
+                    }
+                }
+            }
+        }
+        Ok(None)
+    }
+
+    async fn качати_vod_доріжку(
+        &self,
+        playlist_url: &str,
+        dest: &Path,
+        sink: &dyn ProgressSink,
+        cancel: &Cancel,
+        done: &mut u64,
+    ) -> Result<Option<ResumeBlob>> {
+        let txt = fetch_text(&self.client, playlist_url).await?;
+        match розібрати(txt.as_bytes(), playlist_url)? {
+            Маніфест::Media(m) => {
+                if !m.end_list {
+                    tracing::warn!("HLS live-доріжка {playlist_url}: цей цикл не качаємо");
+                    return Ok(None);
+                }
+                if m.сегменти.is_empty() {
+                    tracing::warn!("media playlist без сегментів: {playlist_url}");
+                    return Ok(None);
+                }
+                self.тягнути_сегменти(&m.сегменти, dest, sink, cancel, done)
+                    .await
+            }
+            Маніфест::Master { .. } => Err(Error::Store(format!(
+                "доріжка вказує знову на master: {playlist_url}"
+            ))),
+        }
     }
 }
 
@@ -378,12 +528,15 @@ fn додати_доріжки(files: &mut Vec<PlannedFile>, доріжки: &[�
     }
 }
 
-fn імʼя_доріжки(d: &Доріжка, uri: &str) -> String {
-    let мітка = d
-        .language
+fn мітка_доріжки(d: &Доріжка) -> &str {
+    d.language
         .as_deref()
         .filter(|s| !s.is_empty())
-        .unwrap_or(d.name.as_str());
+        .unwrap_or(d.name.as_str())
+}
+
+fn імʼя_доріжки(d: &Доріжка, uri: &str) -> String {
+    let мітка = мітка_доріжки(d);
     match d.kind {
         ТипДоріжки::Audio => format!("audio-{мітка}.m3u8"),
         ТипДоріжки::Subtitles => {
@@ -396,6 +549,27 @@ fn імʼя_доріжки(d: &Доріжка, uri: &str) -> String {
             format!("subs-{мітка}.{розширення}")
         }
     }
+}
+
+/// `audio-*` / `subs-*` з урахуванням `unique_path` (`audio-uk (1).m3u8`).
+fn це_імʼя_доріжки(path: &Path) -> bool {
+    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+    let основа = основа_імені(stem).to_ascii_lowercase();
+    основа.starts_with("audio-") || основа.starts_with("subs-")
+}
+
+fn знайти_доріжку<'a>(доріжки: &'a [Доріжка], dest: &Path) -> Option<&'a Доріжка> {
+    let stem = dest.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+    let основа = основа_імені(stem).to_ascii_lowercase();
+    let (kind, мітка) = if let Some(rest) = основа.strip_prefix("audio-") {
+        (ТипДоріжки::Audio, rest)
+    } else {
+        let rest = основа.strip_prefix("subs-")?;
+        (ТипДоріжки::Subtitles, rest)
+    };
+    доріжки.iter().find(|d| {
+        d.kind == kind && мітка_доріжки(d).eq_ignore_ascii_case(мітка)
+    })
 }
 
 async fn fetch_text(client: &Client, url: &str) -> Result<String> {
@@ -649,6 +823,82 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn master_качає_audio_і_subs_разом_із_відео() {
+        let server = EvilServer::start().await.unwrap();
+        let url = server.url("/hls/media/master.m3u8");
+        let p = HlsProtocol::new().unwrap();
+        let probed = p.probe(&url).await.unwrap();
+
+        let video_name = probed
+            .files
+            .iter()
+            .find(|f| {
+                !f.suggested_name.starts_with("audio-") && !f.suggested_name.starts_with("subs-")
+            })
+            .unwrap()
+            .suggested_name
+            .clone();
+        let audio_name = probed
+            .files
+            .iter()
+            .find(|f| f.suggested_name.starts_with("audio-"))
+            .unwrap()
+            .suggested_name
+            .clone();
+        let subs_name = probed
+            .files
+            .iter()
+            .find(|f| f.suggested_name.starts_with("subs-"))
+            .unwrap()
+            .suggested_name
+            .clone();
+        assert_eq!(video_name, "720p.ts");
+        assert_eq!(audio_name, "audio-uk.m3u8");
+        assert_eq!(subs_name, "subs-uk.vtt");
+
+        let dir = std::env::temp_dir().join(format!("hls-tracks-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let dest_video = dir.join(&video_name);
+        let dest_audio = dir.join(&audio_name);
+        let dest_subs = dir.join(&subs_name);
+
+        p.run(
+            RunContext {
+                task_id: 9,
+                source: url,
+                targets: vec![dest_video.clone(), dest_audio.clone(), dest_subs.clone()],
+                resume: None,
+                cancel: Cancel::new(),
+            },
+            &Німий,
+        )
+        .await
+        .unwrap();
+
+        let video = std::fs::read(&dest_video).unwrap();
+        assert!(!video.is_empty(), "відео не має бути порожнім");
+        let mut expect = Vec::new();
+        expect.extend_from_slice(b"SEG0-PAYLOAD-AAAAAAAAAAAAAAAA");
+        expect.extend_from_slice(b"SEG1-PAYLOAD-BBBBBBBBBBBBBBBB");
+        assert_eq!(video, expect, "відео має бути склейкою seg0+seg1");
+
+        let audio = std::fs::read(&dest_audio).unwrap();
+        assert!(
+            dest_audio.is_file() && !audio.is_empty(),
+            "audio файл має існувати й не бути порожнім"
+        );
+        assert_eq!(audio, b"AUDIO-TRACK-PAYLOAD");
+
+        let subs = std::fs::read_to_string(&dest_subs).unwrap();
+        assert!(
+            subs.contains("WEBVTT") || subs.contains("українські субтитри"),
+            "субтитри мають містити WEBVTT або текст зі стенда, маємо {subs:?}"
+        );
+
+        server.shutdown().await;
+    }
+
+    #[tokio::test]
     async fn master_качає_якість_з_імені_цілі() {
         let server = EvilServer::start().await.unwrap();
         let url = server.url("/hls/vod/master.m3u8");
@@ -710,6 +960,11 @@ mod tests {
         assert_eq!(основа_імені("360p (1)"), "360p");
         assert_eq!(основа_імені("360p (12)"), "360p");
         assert_eq!(основа_імені("video (copy)"), "video (copy)");
+        assert!(це_імʼя_доріжки(Path::new("audio-uk.m3u8")));
+        assert!(це_імʼя_доріжки(Path::new("audio-uk (1).m3u8")));
+        assert!(це_імʼя_доріжки(Path::new("subs-uk.vtt")));
+        assert!(!це_імʼя_доріжки(Path::new("720p.ts")));
+        assert!(!це_імʼя_доріжки(Path::new("out.ts")));
     }
 
     #[tokio::test]
