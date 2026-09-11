@@ -42,6 +42,43 @@ mod tests {
     }
 
     #[test]
+    fn у_корені_репозиторію_лише_readme_md() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let root = root
+            .canonicalize()
+            .expect("корінь репозиторію");
+        let mut extra = Vec::new();
+        fn walk(dir: &std::path::Path, root: &std::path::Path, extra: &mut Vec<std::path::PathBuf>) {
+            let Ok(rd) = std::fs::read_dir(dir) else {
+                return;
+            };
+            for e in rd.flatten() {
+                let name = e.file_name();
+                if name == ".git" || name == "target" {
+                    continue;
+                }
+                let p = e.path();
+                if p.is_dir() {
+                    walk(&p, root, extra);
+                    continue;
+                }
+                if p.extension().and_then(|x| x.to_str()) != Some("md") {
+                    continue;
+                }
+                let rel = p.strip_prefix(root).unwrap_or(&p);
+                if rel != std::path::Path::new("README.md") {
+                    extra.push(rel.to_path_buf());
+                }
+            }
+        }
+        walk(&root, &root, &mut extra);
+        assert!(
+            extra.is_empty(),
+            "на D:\\Downloader зайві .md (правило: лише README.md): {extra:?}"
+        );
+    }
+
+    #[test]
     fn помилка_зміненого_ресурсу_називає_url() {
         let err = Error::ResourceChanged {
             url: "https://example.com/file.iso".into(),
