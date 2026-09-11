@@ -25,8 +25,29 @@ use downloader_core::protocol::{
 };
 use reqwest::Client;
 
-use crate::download::{Options, download_with_probe};
-use crate::probe::probe_with_session;
+use crate::download::{DownloadError, Options, download_with_probe};
+use crate::probe::{ProbeError, probe_with_session};
+
+fn з_проби(e: ProbeError) -> Error {
+    match e {
+        ProbeError::BadStatus { url, status } if matches!(status, 401 | 403) => {
+            Error::AuthRequired { url, status }
+        }
+        other => Error::Store(other.to_string()),
+    }
+}
+
+fn з_качання(url: &str, e: DownloadError) -> Error {
+    match e {
+        DownloadError::BadStatus { status, .. } if matches!(status, 401 | 403) => {
+            Error::AuthRequired {
+                url: url.to_owned(),
+                status,
+            }
+        }
+        other => Error::Store(other.to_string()),
+    }
+}
 
 /// Модуль завантаження по HTTP і HTTPS.
 pub struct HttpProtocol {
@@ -80,7 +101,7 @@ impl Protocol for HttpProtocol {
         let session = self.поточна_сесія(None);
         let info = probe_with_session(&self.client, source, &session)
             .await
-            .map_err(|e| Error::Store(e.to_string()))?;
+            .map_err(з_проби)?;
 
         Ok(Probed {
             total_size: info.size,
@@ -109,7 +130,7 @@ impl Protocol for HttpProtocol {
         let session = self.поточна_сесія(Some(&ctx.session));
         let info = probe_with_session(&self.client, &ctx.source, &session)
             .await
-            .map_err(|e| Error::Store(e.to_string()))?;
+            .map_err(з_проби)?;
 
         if let Some(total) = info.size {
             sink.report(Progress::TotalKnown { total });
@@ -160,7 +181,7 @@ impl Protocol for HttpProtocol {
 
         // Обидва живуть разом: доки качає — доти й пересилаємо.
         let (out, ()) = tokio::join!(качання, пересилання);
-        let out = out.map_err(|e| Error::Store(e.to_string()))?;
+        let out = out.map_err(|e| з_качання(&ctx.source, e))?;
 
         sink.report(Progress::Advanced { done: out.bytes });
         sink.report(Progress::Segments {
@@ -214,6 +235,8 @@ impl Protocol for HttpProtocol {
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
     reason = "у тестах падіння — це і є повідомлення про помилку"
 )]
 mod tests {
@@ -230,6 +253,19 @@ mod tests {
 
     impl ProgressSink for Німий {
         fn report(&self, _: Progress) {}
+    }
+
+    #[tokio::test]
+    async fn без_cookie_auth_це_authrequired() {
+        let server = EvilServer::start().await.unwrap();
+        let p = HttpProtocol::new(4).unwrap();
+        let url = server.url("/auth/16k");
+        let err = p.probe(&url).await.expect_err("без cookie має бути 403");
+        match err {
+            Error::AuthRequired { status: 403, .. } => {}
+            other => panic!("очікували AuthRequired 403, маємо {other}"),
+        }
+        server.shutdown().await;
     }
 
     #[tokio::test]

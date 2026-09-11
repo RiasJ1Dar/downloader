@@ -20,6 +20,7 @@ use downloader_core::protocol::{
     Session,
 };
 use downloader_ipc::protocol::{Event, Request, Response};
+use downloader_proto_dash::DashProtocol;
 use downloader_proto_hls::HlsProtocol;
 use downloader_proto_http::download::{Options, download_with_probe};
 use downloader_proto_http::probe::{probe, probe_with_session};
@@ -292,8 +293,12 @@ async fn main() -> Result<()> {
         Command::Probe { url } => {
             let hls = HlsProtocol::new()?;
             if hls.handles(&url) {
-                показати_hls(&hls, &url).await?;
+                показати_модуль(&hls, &url).await?;
             } else {
+                let dash = DashProtocol::new()?;
+                if dash.handles(&url) {
+                    показати_модуль(&dash, &url).await?;
+                } else {
                 let info = probe(&client, &url).await?;
 
                 println!("адреса:      {}", info.final_url);
@@ -315,6 +320,7 @@ async fn main() -> Result<()> {
                     "ім'я:        {}",
                     info.filename().unwrap_or_else(|| "невідоме".to_owned())
                 );
+                }
             }
         }
 
@@ -345,7 +351,12 @@ async fn main() -> Result<()> {
             }
             let hls = HlsProtocol::new()?;
             if hls.handles(url) {
-                качати_hls(&hls, url, out, limit_kb, session).await?;
+                качати_модулем(&hls, url, out, limit_kb, session).await?;
+                return Ok(());
+            }
+            let dash = DashProtocol::new()?;
+            if dash.handles(url) {
+                качати_модулем(&dash, url, out, limit_kb, session).await?;
                 return Ok(());
             }
             let info = probe_with_session(&client, url, &session).await?;
@@ -461,9 +472,9 @@ impl ProgressSink for НімийПрогрес {
     fn report(&self, _progress: Progress) {}
 }
 
-/// `dl probe` для маніфеста HLS: файли й що обрано, без качання.
-async fn показати_hls(hls: &HlsProtocol, url: &str) -> Result<()> {
-    let probed = hls.probe(url).await?;
+/// `dl probe` для HLS/DASH: файли й що обрано, без качання.
+async fn показати_модуль(p: &dyn Protocol, url: &str) -> Result<()> {
+    let probed = p.probe(url).await?;
     println!("адреса:      {}", probed.final_url);
     println!(
         "розмір:      {}",
@@ -493,25 +504,25 @@ async fn показати_hls(hls: &HlsProtocol, url: &str) -> Result<()> {
     Ok(())
 }
 
-/// `dl get` для HLS: probe → шляхи для selected → `run` → MotW на записане.
-async fn качати_hls(
-    hls: &HlsProtocol,
+/// `dl get` для HLS/DASH: probe → шляхи для selected → `run` → MotW.
+async fn качати_модулем(
+    p: &dyn Protocol,
     url: &str,
     out: Option<PathBuf>,
     limit_kb: u64,
     session: Session,
 ) -> Result<()> {
     if limit_kb > 0 {
-        match hls.set_rate_limit(limit_kb.saturating_mul(1024)) {
+        match p.set_rate_limit(limit_kb.saturating_mul(1024)) {
             RateLimitSupport::Applied => {}
             RateLimitSupport::Unsupported => {
                 println!("⚠ ліміт швидкості цей протокол не вміє застосувати");
             }
         }
     }
-    hls.set_session(session.clone());
+    p.set_session(session.clone());
 
-    let probed = hls.probe(url).await?;
+    let probed = p.probe(url).await?;
     for f in probed.files.iter().filter(|f| f.selected) {
         let safe = names::sanitize(&f.suggested_name);
         if safe != f.suggested_name {
@@ -546,8 +557,8 @@ async fn качати_hls(
         cancel: Cancel::new(),
         session,
     };
-    if hls.run(ctx, &НімийПрогрес).await?.is_some() {
-        println!("завантаження HLS зупинено до завершення");
+    if p.run(ctx, &НімийПрогрес).await?.is_some() {
+        println!("завантаження зупинено до завершення");
     }
 
     let secs = started.elapsed().as_secs_f64().max(0.001);
@@ -827,7 +838,7 @@ mod tests {
         ));
         std::fs::create_dir_all(&dir).expect("тека");
         let dest = dir.join("out.ts");
-        качати_hls(&hls, &url, Some(dest.clone()), 0, Session::default())
+        качати_модулем(&hls, &url, Some(dest.clone()), 0, Session::default())
             .await
             .expect("get");
 
@@ -836,6 +847,38 @@ mod tests {
         expect.extend_from_slice(b"SEG0-PAYLOAD-AAAAAAAAAAAAAAAA");
         expect.extend_from_slice(b"SEG1-PAYLOAD-BBBBBBBBBBBBBBBB");
         assert_eq!(got, expect, "склейка сегментів не збіглась");
+        server.shutdown().await;
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn dash_get_vod_склеює_сегменти() {
+        let server = downloader_testserver::EvilServer::start()
+            .await
+            .expect("стенд");
+        let url = server.url("/dash/vod/manifest.mpd");
+        let dash = DashProtocol::new().expect("dash");
+        assert!(dash.handles(&url), "mpd має йти в DASH, не в HTTP");
+
+        let dir = std::env::temp_dir().join(format!(
+            "dl-e17-dash-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).expect("тека");
+        let dest = dir.join("out.mp4");
+        качати_модулем(&dash, &url, Some(dest.clone()), 0, Session::default())
+            .await
+            .expect("get");
+
+        let got = std::fs::read(&dest).expect("прочитати");
+        assert!(
+            got.starts_with(b"INIT-PAYLOAD-DASH-AAAAAAAAAA"),
+            "мав початись з init"
+        );
         server.shutdown().await;
         let _ = std::fs::remove_dir_all(&dir);
     }

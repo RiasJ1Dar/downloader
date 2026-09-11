@@ -548,6 +548,7 @@ dependencies = [
  "clap",
  "downloader-core",
  "downloader-ipc",
+ "downloader-proto-dash",
  "downloader-proto-hls",
  "downloader-proto-http",
  "downloader-testserver",
@@ -668,6 +669,17 @@ dependencies = [
  "reqwest",
  "sha2",
  "thiserror 2.0.20",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "downloader-proto-ytdlp"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "downloader-core",
+ "serde_json",
  "tokio",
  "tracing",
 ]

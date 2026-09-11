@@ -205,6 +205,10 @@ impl Engine {
 
         let protocol_name = protocol.name().to_owned();
 
+        if let Some(id) = знайти_живе(&self.live, url) {
+            anyhow::bail!("це посилання вже качається як завдання {id}");
+        }
+
         // Сесія до проби: інакше `/auth` і сесійне HLS знову дадуть 403.
         protocol.set_session(session.clone());
         if session.cookies.is_some() {
@@ -574,6 +578,25 @@ impl Engine {
     }
 }
 
+/// Живе завдання з тим самим URL: running / queued / paused.
+fn знайти_живе(live: &Mutex<HashMap<i64, Live>>, url: &str) -> Option<i64> {
+    let Ok(guard) = live.lock() else {
+        return None;
+    };
+    guard.values().find_map(|t| {
+        if t.url == url
+            && matches!(
+                t.status,
+                Status::Running | Status::Queued | Status::Paused
+            )
+        {
+            Some(t.id)
+        } else {
+            None
+        }
+    })
+}
+
 /// Шляхи для файлів із `selected == true`.
 ///
 /// Якщо людина дала `dest` і обраний рівно один файл — беремо `dest` як є.
@@ -661,6 +684,46 @@ mod tests {
 
     fn absent_dir(tag: &str) -> PathBuf {
         std::env::temp_dir().join(format!("dl-e10-absent-{tag}"))
+    }
+
+    #[test]
+    fn знайти_живе_бачить_running_і_ігнорує_done() {
+        let live = Mutex::new(HashMap::from([
+            (
+                1,
+                Live {
+                    id: 1,
+                    url: "https://a".into(),
+                    name: "a".into(),
+                    status: Status::Done,
+                    done: 0,
+                    total: None,
+                    segments: 0,
+                    error: None,
+                    prev_done: 0,
+                    speed: 0,
+                    session: Session::default(),
+                },
+            ),
+            (
+                2,
+                Live {
+                    id: 2,
+                    url: "https://b".into(),
+                    name: "b".into(),
+                    status: Status::Running,
+                    done: 0,
+                    total: None,
+                    segments: 0,
+                    error: None,
+                    prev_done: 0,
+                    speed: 0,
+                    session: Session::default(),
+                },
+            ),
+        ]));
+        assert_eq!(знайти_живе(&live, "https://b"), Some(2));
+        assert_eq!(знайти_живе(&live, "https://a"), None);
     }
 
     #[test]

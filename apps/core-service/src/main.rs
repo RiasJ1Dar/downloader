@@ -12,6 +12,7 @@
 //! * **Один контракт.** Зовнішні плагіни-протоколи говоритимуть тим самим
 //!   протоколом, що й вікно, — а не другим, окремо вигаданим.
 
+mod clipboard_watch;
 mod engine;
 mod server;
 
@@ -96,6 +97,10 @@ async fn main() -> anyhow::Result<()> {
     registry.register(Box::new(downloader_proto_http::HttpProtocol::new(8)?));
 
     let engine = engine::Engine::new(&db, downloads.clone(), registry)?;
+
+    if std::env::var_os("DOWNLOADER_WATCH_CLIPBOARD").is_some() {
+        tokio::spawn(clipboard_watch::run());
+    }
 
     tracing::info!(
         база = %db.display(),

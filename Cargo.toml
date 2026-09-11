@@ -7,6 +7,7 @@ members = [
     "crates/proto-hls",
     "crates/proto-dash",
     "crates/proto-external",
+    "crates/proto-ytdlp",
     "crates/winutil",
     "crates/testserver",
     "apps/cli",
@@ -27,6 +28,7 @@ downloader-proto-http = { path = "crates/proto-http" }
 downloader-proto-hls = { path = "crates/proto-hls" }
 downloader-proto-dash = { path = "crates/proto-dash" }
 downloader-proto-external = { path = "crates/proto-external" }
+downloader-proto-ytdlp = { path = "crates/proto-ytdlp" }
 downloader-winutil = { path = "crates/winutil" }
 downloader-ipc = { path = "crates/ipc" }
 

@@ -57,6 +57,10 @@ pub enum Error {
     #[error("сховище: {0}")]
     Store(String),
 
+    /// Сервер вимагає вхід (401/403). Без пароля й cookie в тексті.
+    #[error("потрібна авторизація (HTTP {status}): {url}")]
+    AuthRequired { url: String, status: u16 },
+
     #[error("помилка вводу-виводу: {0}")]
     Io(#[from] std::io::Error),
 }
