@@ -385,35 +385,35 @@ fn зібрати_адреси(
     list: Option<PathBuf>,
     clipboard: bool,
 ) -> Result<Vec<String>> {
-    let mut блоки = Vec::new();
+    let mut з_пакета = Vec::new();
     if clipboard {
-        блоки.push(текст_буфера()?);
+        з_пакета.push(текст_буфера()?);
     }
     if let Some(path) = list {
         let text = std::fs::read_to_string(&path)
             .with_context(|| format!("не прочитати список {}", path.display()))?;
-        блоки.push(text);
-    }
-    if let Some(u) = url {
-        блоки.push(u);
-    }
-    if блоки.is_empty() {
-        bail!("вкажіть посилання, --list або --clipboard");
+        з_пакета.push(text);
     }
     let mut out = Vec::new();
-    for блок in блоки {
+    for блок in з_пакета {
         for line in блок.lines() {
             let line = line.trim();
             if line.is_empty() || line.starts_with('#') {
                 continue;
             }
+            if !expand::з_масового_джерела(line) {
+                continue;
+            }
             out.extend(expand::розгорнути_шаблон(line)?);
         }
     }
-    if out.is_empty() {
-        bail!("після розгортання не лишилось жодної адреси");
+    if let Some(u) = url {
+        out.extend(expand::розгорнути_шаблон(u.trim())?);
     }
-    Ok(out)
+    if out.is_empty() {
+        bail!("вкажіть посилання, --list або --clipboard");
+    }
+    Ok(expand::унікальні_порядком(out))
 }
 
 /// Прогрес у консолі не малюємо: HTTP і так друкує підсумок, HLS — список файлів.

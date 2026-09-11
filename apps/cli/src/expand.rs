@@ -4,9 +4,30 @@
 //! `]`, тож зловмисний рядок не роздує розбір.
 
 use anyhow::{Result, bail};
+use std::collections::HashSet;
 
 /// Стеля розгортання: більше адрес — помилка, не тихий обріз.
 const СТЕЛЯ: u64 = 1000;
+
+/// Підрядки з DnD HTML, які ніколи не є файлом для качання (урок DLMan url-intake).
+const СМІТТЯ: &[&str] = &["w3.org/", "xmlns", "schema.org"];
+
+/// Рядок із буфера чи списка: лише http(s), без xmlns-сміття.
+#[must_use]
+pub fn з_масового_джерела(line: &str) -> bool {
+    let l = line.trim();
+    if !(l.starts_with("http://") || l.starts_with("https://")) {
+        return false;
+    }
+    !СМІТТЯ.iter().any(|j| l.contains(j))
+}
+
+/// Прибрати повтори, лишити першу появу.
+#[must_use]
+pub fn унікальні_порядком(urls: Vec<String>) -> Vec<String> {
+    let mut seen = HashSet::new();
+    urls.into_iter().filter(|u| seen.insert(u.clone())).collect()
+}
 
 /// Розгорнути `file[001-100].zip` у список адрес.
 ///
@@ -163,5 +184,23 @@ mod tests {
         let err =
             розгорнути_шаблон("http://ex.com/a[1-2]b[3-4].zip").expect_err("дві пари мають впасти");
         assert!(err.to_string().contains("кілька пар дужок"), "{err}");
+    }
+
+    #[test]
+    fn масове_джерело_ріже_сміття_і_не_http() {
+        assert!(з_масового_джерела("https://cdn.example/a.zip"));
+        assert!(!з_масового_джерела("ftp://ex.com/a.zip"));
+        assert!(!з_масового_джерела("https://www.w3.org/1999/xhtml"));
+        assert!(!з_масового_джерела("ext:dummy"));
+    }
+
+    #[test]
+    fn унікальні_лишають_перший() {
+        let got = унікальні_порядком(vec![
+            "https://a".into(),
+            "https://b".into(),
+            "https://a".into(),
+        ]);
+        assert_eq!(got, vec!["https://a", "https://b"]);
     }
 }
