@@ -30,9 +30,22 @@ function withCookies(url, referer, extraUrl) {
   }
 }
 
-chrome.runtime.onMessage.addListener((msg) => {
+const lastManifest = new Map();
+
+chrome.webRequest.onCompleted.addListener(
+  (d) => {
+    const u = d.url || "";
+    if (!/\.m3u8(\?|$)/i.test(u) && !/\.mpd(\?|$)/i.test(u)) return;
+    if (d.tabId >= 0) lastManifest.set(d.tabId, u);
+  },
+  { urls: ["http://*/*", "https://*/*"] }
+);
+
+chrome.runtime.onMessage.addListener((msg, sender) => {
   if (!msg || msg.op !== "add") return;
-  const target = msg.media || msg.page;
+  const tabId = sender.tab && sender.tab.id;
+  const manifest = tabId >= 0 ? lastManifest.get(tabId) : undefined;
+  const target = manifest || msg.media || msg.page;
   if (!target) return;
   withCookies(msg.page || target, msg.page, target);
 });

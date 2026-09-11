@@ -15,8 +15,11 @@
 mod clipboard_watch;
 mod engine;
 mod server;
+#[cfg(windows)]
+mod tray;
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use anyhow::Context;
 use clap::Parser;
@@ -128,13 +131,39 @@ async fn main() -> anyhow::Result<()> {
         "ядро запущено"
     );
 
+    #[cfg(windows)]
+    let mut з_трею = if ставити_nmhost {
+        match tray::старт(Arc::clone(&engine), downloads.clone()) {
+            Ok(rx) => Some(rx),
+            Err(e) => {
+                tracing::warn!(error = %e, "трей не стартував");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
     tokio::select! {
         res = server::serve(listener, engine) => res?,
         _ = tokio::signal::ctrl_c() => {
-            // Чисте завершення: активні завантаження мають файл стану поруч
-            // із файлом, тож наступний запуск продовжить їх, а не почне
-            // спочатку.
             tracing::info!("отримано сигнал зупинки, ядро завершується");
+        }
+        _ = async {
+            #[cfg(windows)]
+            if let Some(rx) = з_трею.as_mut() {
+                while !*rx.borrow() {
+                    if rx.changed().await.is_err() {
+                        break;
+                    }
+                }
+            } else {
+                std::future::pending::<()>().await;
+            }
+            #[cfg(not(windows))]
+            std::future::pending::<()>().await;
+        } => {
+            tracing::info!("вихід з меню трею");
         }
     }
 
