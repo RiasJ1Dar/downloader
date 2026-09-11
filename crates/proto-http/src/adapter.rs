@@ -16,23 +16,27 @@
 //! Тому HTTP не має жодних привілеїв: ядро знає його рівно настільки, як
 //! знатиме будь-який зовнішній плагін.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use downloader_core::error::{Error, Result};
 use downloader_core::protocol::{
     PlannedFile, Probed, Progress, ProgressSink, Protocol, RateLimitSupport, ResumeBlob,
-    RunContext,
+    RunContext, Session,
 };
 use reqwest::Client;
 
 use crate::download::{Options, download_with_probe};
-use crate::probe::probe;
+use crate::probe::probe_with_session;
 
 /// Модуль завантаження по HTTP і HTTPS.
 pub struct HttpProtocol {
     client: Client,
     /// Стеля швидкості. Змінюється ззовні, тому за м'ютексом.
-    rate_limit: std::sync::Mutex<u64>,
+    rate_limit: Mutex<u64>,
+    /// Cookies / Referer останнього `set_session`. Для `probe`, де немає
+    /// [`RunContext`]. `run` бере сесію з контексту, щоб паралельні
+    /// завдання не перетирали одне одному.
+    session: Mutex<Session>,
     /// Скільки з'єднань відкривати на файл.
     parts: usize,
 }
@@ -46,9 +50,17 @@ impl HttpProtocol {
 
         Ok(Self {
             client,
-            rate_limit: std::sync::Mutex::new(0),
+            rate_limit: Mutex::new(0),
+            session: Mutex::new(Session::default()),
             parts,
         })
+    }
+
+    fn поточна_сесія(&self, ctx: Option<&Session>) -> Session {
+        match ctx {
+            Some(s) if !s.is_empty() => s.clone(),
+            _ => self.session.lock().map(|g| g.clone()).unwrap_or_default(),
+        }
     }
 }
 
@@ -65,7 +77,8 @@ impl Protocol for HttpProtocol {
     }
 
     async fn probe(&self, source: &str) -> Result<Probed> {
-        let info = probe(&self.client, source)
+        let session = self.поточна_сесія(None);
+        let info = probe_with_session(&self.client, source, &session)
             .await
             .map_err(|e| Error::Store(e.to_string()))?;
 
@@ -93,7 +106,8 @@ impl Protocol for HttpProtocol {
             ));
         };
 
-        let info = probe(&self.client, &ctx.source)
+        let session = self.поточна_сесія(Some(&ctx.session));
+        let info = probe_with_session(&self.client, &ctx.source, &session)
             .await
             .map_err(|e| Error::Store(e.to_string()))?;
 
@@ -116,8 +130,11 @@ impl Protocol for HttpProtocol {
             on_progress: Some(Arc::new(move |done, segments| {
                 // Помилка надсилання означає лише, що слухач пішов, —
                 // качання це не стосується.
-                let _ = tx.send((done, segments));
+                if tx.send((done, segments)).is_err() {
+                    tracing::trace!("слухач прогресу пішов");
+                }
             })),
+            session,
             ..Options::default()
         };
 
@@ -171,6 +188,13 @@ impl Protocol for HttpProtocol {
         }
     }
 
+    fn set_session(&self, session: Session) {
+        match self.session.lock() {
+            Ok(mut g) => *g = session,
+            Err(_) => tracing::error!("сесія HTTP отруєна, cookie не застосовано"),
+        }
+    }
+
     async fn verify(&self, ctx: &RunContext) -> Result<()> {
         // Рушій уже звірив довжину з `Content-Length` і впав би на
         // розбіжності. Тут лишається хіба переконатись, що файл на місці:
@@ -184,5 +208,72 @@ impl Protocol for HttpProtocol {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    reason = "у тестах падіння — це і є повідомлення про помилку"
+)]
+mod tests {
+    use super::*;
+    use downloader_core::protocol::{Cancel, Progress};
+    use downloader_testserver::{EvilServer, expected_sha256};
+    use sha2::{Digest, Sha256};
+
+    fn sha256_hex(data: &[u8]) -> String {
+        format!("{:x}", Sha256::digest(data))
+    }
+
+    struct Німий;
+
+    impl ProgressSink for Німий {
+        fn report(&self, _: Progress) {}
+    }
+
+    #[tokio::test]
+    async fn cookie_і_referer_проходять_auth() {
+        let server = EvilServer::start().await.unwrap();
+        let p = HttpProtocol::new(4).unwrap();
+        let session = Session::from_parts(
+            Some("other=1; session=ok; more=2".to_owned()),
+            Some("http://example.test/page".to_owned()),
+        );
+        p.set_session(session.clone());
+
+        let url = server.url("/auth/16k");
+        let probed = p.probe(&url).await.unwrap();
+        assert_eq!(probed.total_size, Some(16 * 1024));
+
+        let dir = std::env::temp_dir().join(format!(
+            "http-auth-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let dest = dir.join("auth.bin");
+        p.run(
+            RunContext {
+                task_id: 1,
+                source: url,
+                targets: vec![dest.clone()],
+                resume: None,
+                cancel: Cancel::new(),
+                session,
+            },
+            &Німий,
+        )
+        .await
+        .unwrap();
+
+        let got = std::fs::read(&dest).unwrap();
+        assert_eq!(got.len(), 16 * 1024);
+        assert_eq!(sha256_hex(&got), expected_sha256("/auth/16k").unwrap());
+        server.shutdown().await;
+        drop(std::fs::remove_dir_all(&dir));
     }
 }

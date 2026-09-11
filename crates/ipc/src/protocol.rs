@@ -49,6 +49,14 @@ pub enum Request {
         dest: Option<String>,
         /// Скільки з'єднань. `None` — за налаштуваннями ядра.
         parts: Option<usize>,
+        /// Заголовок `Cookie`: `n=v; n2=v2`.
+        ///
+        /// `#[serde(default)]` — старі клієнти без цього поля не падають.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cookies: Option<String>,
+        /// Заголовок `Referer`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        referer: Option<String>,
     },
 
     /// Список завдань.
@@ -181,6 +189,7 @@ impl TaskView {
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,
+    clippy::panic,
     reason = "у тестах падіння — це і є повідомлення про помилку"
 )]
 mod tests {
@@ -192,16 +201,69 @@ mod tests {
             url: "https://e.com/звіт.pdf".to_owned(),
             dest: Some("D:/dl/звіт.pdf".to_owned()),
             parts: Some(8),
+            cookies: None,
+            referer: None,
         };
 
         let json = serde_json::to_string(&req).unwrap();
         assert!(json.contains("\"kind\":\"add\""), "{json}");
+        assert!(
+            !json.contains("cookies"),
+            "порожні cookies не мають потрапляти в JSON: {json}"
+        );
 
         let back: Request = serde_json::from_str(&json).unwrap();
         match back {
-            Request::Add { url, parts, .. } => {
+            Request::Add { url, parts, cookies, referer, .. } => {
                 assert_eq!(url, "https://e.com/звіт.pdf");
                 assert_eq!(parts, Some(8));
+                assert!(cookies.is_none());
+                assert!(referer.is_none());
+            }
+            other => panic!("розібралось не в те: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn add_без_нових_полів_десеріалізується() {
+        // Старий клієнт не знає cookies/referer — поле має мати serde default.
+        let json = r#"{"kind":"add","url":"https://e.com/a.bin"}"#;
+        let back: Request = serde_json::from_str(json).unwrap();
+        match back {
+            Request::Add {
+                url,
+                dest,
+                parts,
+                cookies,
+                referer,
+            } => {
+                assert_eq!(url, "https://e.com/a.bin");
+                assert!(dest.is_none());
+                assert!(parts.is_none());
+                assert!(cookies.is_none());
+                assert!(referer.is_none());
+            }
+            other => panic!("розібралось не в те: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn add_з_cookie_і_referer_переживає_серіалізацію() {
+        let req = Request::Add {
+            url: "https://e.com/a.bin".to_owned(),
+            dest: None,
+            parts: None,
+            cookies: Some("n=v; n2=v2".to_owned()),
+            referer: Some("https://e.com/page".to_owned()),
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        let back: Request = serde_json::from_str(&json).unwrap();
+        match back {
+            Request::Add {
+                cookies, referer, ..
+            } => {
+                assert_eq!(cookies.as_deref(), Some("n=v; n2=v2"));
+                assert_eq!(referer.as_deref(), Some("https://e.com/page"));
             }
             other => panic!("розібралось не в те: {other:?}"),
         }

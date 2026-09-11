@@ -24,7 +24,8 @@ use reqwest::header::{IF_RANGE, RANGE};
 use reqwest::{Client, StatusCode};
 
 use crate::headers::Validator;
-use crate::probe::{Probe, ProbeError, probe};
+use crate::probe::{Probe, ProbeError, apply_session, probe_with_session};
+use downloader_core::protocol::Session;
 
 /// Налаштування качання.
 #[derive(Clone)]
@@ -56,6 +57,8 @@ pub struct Options {
     /// `sync` на диск. Дві секунди — компроміс: на 10 МБ/с це щонайбільше
     /// 20 МБ зайвої роботи в найгіршому випадку.
     pub checkpoint_every: std::time::Duration,
+    /// Cookies і Referer цього завдання. Порожня сесія — звичайний запит.
+    pub session: Session,
 }
 
 impl Default for Options {
@@ -70,6 +73,7 @@ impl Default for Options {
             cancel: None,
             on_progress: None,
             checkpoint_every: std::time::Duration::from_secs(2),
+            session: Session::default(),
         }
     }
 }
@@ -192,7 +196,7 @@ pub async fn download(
     dest: &Path,
     opts: &Options,
 ) -> Result<Outcome, DownloadError> {
-    let info = probe(client, url).await?;
+    let info = probe_with_session(client, url, &opts.session).await?;
     download_with_probe(client, &info, dest, opts).await
 }
 
@@ -264,7 +268,7 @@ pub async fn download_with_probe(
     // записати файл стану вже після того, як `finish` його прибрав, і поруч
     // із готовим файлом лишався `.dlpart`. Саме на цьому моргав тест.
     ticker.abort();
-    let _ = ticker.await;
+    drop(ticker.await);
 
     if let Some(err) = failure {
         // Качання не вдалося — але те, що вже на диску, має вціліти разом зі
@@ -494,7 +498,7 @@ async fn pull(
     from: u64,
     to: u64,
 ) -> Result<(), DownloadError> {
-    let mut req = client.get(&shared.url);
+    let mut req = apply_session(client.get(&shared.url), &shared.opts.session);
 
     // Межа в HTTP включна, тому `to - 1`. Нескінченний хвіст (`to` = MAX)
     // просимо відкритим діапазоном.

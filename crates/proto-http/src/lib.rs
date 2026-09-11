@@ -12,4 +12,4 @@ pub mod probe;
 pub use headers::{ContentRange, RangeSupport, Validator};
 pub use adapter::HttpProtocol;
 pub use download::{DownloadError, Options, Outcome, download};
-pub use probe::{Probe, ProbeError, probe};
+pub use probe::{Probe, ProbeError, apply_session, probe, probe_with_session};

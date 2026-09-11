@@ -23,11 +23,11 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use downloader_core::protocol::{
-    Cancel, PlannedFile, Progress, ProgressSink, Registry, RunContext,
+    Cancel, PlannedFile, Progress, ProgressSink, Registry, RunContext, Session,
 };
 use downloader_core::store::{NewFile, NewTask, Status, Store};
 use downloader_ipc::protocol::{Event, TaskView};
-use downloader_winutil::{motw, names, paths};
+use downloader_winutil::{motw, names, paths, вистачить_місця};
 use tokio::sync::broadcast;
 
 /// Як часто розсилати знімок списку.
@@ -54,6 +54,9 @@ struct Live {
     /// Байтів на попередньому тіку — для обчислення швидкості.
     prev_done: u64,
     speed: u64,
+    /// Cookies / Referer цього завдання. Лише в пам'яті: пауза/продовження
+    /// в тому самому процесі їх зберігає; після рестарту ядра — порожньо.
+    session: Session,
 }
 
 impl Live {
@@ -190,6 +193,7 @@ impl Engine {
         url: &str,
         dest: Option<PathBuf>,
         _parts: Option<usize>,
+        session: Session,
     ) -> anyhow::Result<i64> {
         // Хто це качатиме, вирішує реєстр, а не ядро. Саме тут і живе межа.
         let Some(protocol) = self.registry.find(url) else {
@@ -200,6 +204,15 @@ impl Engine {
         };
 
         let protocol_name = protocol.name().to_owned();
+
+        // Сесія до проби: інакше `/auth` і сесійне HLS знову дадуть 403.
+        protocol.set_session(session.clone());
+        if session.cookies.is_some() {
+            tracing::info!("cookie задано");
+        }
+        if session.referer.is_some() {
+            tracing::info!("referer задано");
+        }
 
         // Проба до запису в базу: інакше в списку з'явиться завдання, про яке
         // нічого не відомо — ні розміру, ні імені, ні чи воно взагалі існує.
@@ -215,6 +228,10 @@ impl Engine {
         }
 
         let targets: Vec<PathBuf> = planned.iter().map(|(p, _)| p.clone()).collect();
+        let need: u64 = planned.iter().map(|(_, size)| size.unwrap_or(0)).sum();
+        if let Some(first) = targets.first() {
+            вистачить_місця(first, need)?;
+        }
 
         let id = {
             let mut store = self
@@ -259,13 +276,14 @@ impl Engine {
                     error: None,
                     prev_done: 0,
                     speed: 0,
+                    session: session.clone(),
                 },
             );
         }
 
         self.set_status(id, Status::Running, None);
         self.clone()
-            .spawn_download(id, protocol_name, probed.final_url, targets);
+            .spawn_download(id, protocol_name, probed.final_url, targets, session);
         Ok(id)
     }
 
@@ -276,6 +294,7 @@ impl Engine {
         protocol: String,
         source: String,
         targets: Vec<PathBuf>,
+        session: Session,
     ) {
         tokio::spawn(async move {
             let Some(module) = self.registry.by_name(&protocol) else {
@@ -294,12 +313,14 @@ impl Engine {
                 c.insert(id, cancel.clone());
             }
 
+            module.set_session(session.clone());
             let ctx = RunContext {
                 task_id: id,
                 source,
                 targets,
                 resume: None,
                 cancel,
+                session,
             };
 
             match module.run(ctx.clone(), &sink).await {
@@ -380,6 +401,14 @@ impl Engine {
             (task.url, task.protocol, targets)
         };
 
+        let session = match self.live.lock() {
+            Ok(live) => live
+                .get(&id)
+                .map(|t| t.session.clone())
+                .unwrap_or_default(),
+            Err(_) => Session::default(),
+        };
+
         if let Ok(mut live) = self.live.lock()
             && let Some(task) = live.get_mut(&id)
         {
@@ -388,7 +417,8 @@ impl Engine {
         }
 
         self.set_status(id, Status::Running, None);
-        self.clone().spawn_download(id, protocol, url, targets);
+        self.clone()
+            .spawn_download(id, protocol, url, targets, session);
         Ok(())
     }
 

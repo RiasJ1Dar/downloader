@@ -6,7 +6,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
 use downloader_core::protocol::{
-    Cancel, Progress, ProgressSink, Protocol, RateLimitSupport, Registry, RunContext,
+    Cancel, Progress, ProgressSink, Protocol, RateLimitSupport, Registry, RunContext, Session,
 };
 use downloader_proto_external::ExternalProtocol;
 
@@ -66,6 +66,7 @@ async fn dummy_probe_і_run_пишуть_test_на_диск() -> Result<()> {
                 targets: vec![tmp.0.clone()],
                 resume: None,
                 cancel: Cancel::new(),
+                session: Session::default(),
             },
             &Німий,
         )
@@ -117,6 +118,7 @@ async fn реєстр_знаходить_external_і_не_знає_імен_http
                 targets: vec![tmp.0.clone()],
                 resume: None,
                 cancel: Cancel::new(),
+                session: Session::default(),
             },
             &Німий,
         )
@@ -139,6 +141,7 @@ async fn падіння_плагіна_несе_код_і_хвіст_stderr() ->
                 targets: vec![tmp.0.clone()],
                 resume: None,
                 cancel: Cancel::new(),
+                session: Session::default(),
             },
             &Німий,
         )

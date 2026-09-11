@@ -80,10 +80,8 @@ async fn багато_воркерів_на_дрібних_сегментах_н
             // Дрібно: 256 КБ на шматки по 2 КБ — крадіжок будуть десятки.
             min_chunk: 2048,
             max_retries: 3,
-            rate_limit: 0,
-            cancel: None,
-        on_progress: None,
             checkpoint_every: std::time::Duration::from_millis(20),
+            ..Options::default()
         };
 
         let out = download(&client(), &s.url(scenario), &tmp.0, &opts).await?;
@@ -118,9 +116,8 @@ async fn ліміт_швидкості_не_відкриває_вікон_для
             // звіркою межі й записом розширює вікно, у яке встигає чужа
             // крадіжка.
             rate_limit: 512 * 1024,
-            cancel: None,
-        on_progress: None,
             checkpoint_every: std::time::Duration::from_millis(20),
+            ..Options::default()
         };
 
         let _ = download(&client(), &s.url(scenario), &tmp.0, &opts).await?;
@@ -151,10 +148,8 @@ async fn повільний_сервер_із_багатьма_воркерам�
             parts: 16,
             min_chunk: 2048,
             max_retries: 3,
-            rate_limit: 0,
-            cancel: None,
-        on_progress: None,
             checkpoint_every: std::time::Duration::from_millis(10),
+            ..Options::default()
         };
 
         download(&client(), &s.url(scenario), &tmp.0, &opts).await?;

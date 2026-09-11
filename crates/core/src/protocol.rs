@@ -42,6 +42,58 @@ use crate::error::Result;
 /// не заглядаючи всередину.
 pub type ResumeBlob = Vec<u8>;
 
+/// Cookies і Referer для одного завдання.
+///
+/// Формат cookies — як заголовок `Cookie`: `n=v; n2=v2`. Це поле на
+/// завданні, не «магія» HTTP-клієнта: інакше HLS із браузера знову буде 403.
+///
+/// ⚠️ [`Debug`] **не** друкує значень — лише «задано». Інакше журнал і
+/// `?ctx` світили б сесію.
+#[derive(Clone, Default, PartialEq, Eq)]
+pub struct Session {
+    /// Заголовок `Cookie`, якщо є.
+    pub cookies: Option<String>,
+    /// Заголовок `Referer`, якщо є.
+    pub referer: Option<String>,
+}
+
+impl Session {
+    /// Зібрати сесію. Порожній або пробільний рядок = відсутність.
+    #[must_use]
+    pub fn from_parts(cookies: Option<String>, referer: Option<String>) -> Self {
+        Self {
+            cookies: nonempty(cookies),
+            referer: nonempty(referer),
+        }
+    }
+
+    /// Чи немає ні cookies, ні referer.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.cookies.is_none() && self.referer.is_none()
+    }
+}
+
+fn nonempty(v: Option<String>) -> Option<String> {
+    v.and_then(|s| {
+        let t = s.trim();
+        if t.is_empty() {
+            None
+        } else {
+            Some(t.to_owned())
+        }
+    })
+}
+
+impl std::fmt::Debug for Session {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Session")
+            .field("cookies", &self.cookies.as_ref().map(|_| "задано"))
+            .field("referer", &self.referer.as_ref().map(|_| "задано"))
+            .finish()
+    }
+}
+
 /// Що модуль дізнався про посилання.
 #[derive(Debug, Clone, Default)]
 pub struct Probed {
@@ -125,6 +177,12 @@ pub struct RunContext {
     /// ⚠️ Модуль зобов'язаний його перевіряти. Інакше «пауза» в UI стане
     /// кнопкою, яка нічого не робить, — а це гірше за її відсутність.
     pub cancel: Cancel,
+    /// Cookies і Referer цього завдання.
+    ///
+    /// `probe` їх не бачить (немає контексту) — ядро кличе
+    /// [`Protocol::set_session`] **перед** пробою і перед `run`. У `run`
+    /// модуль бере сесію звідси, щоб паралельні завдання не ділили Mutex.
+    pub session: Session,
 }
 
 /// Що модуль повідомляє ядру під час роботи.
@@ -198,6 +256,12 @@ pub trait Protocol: Send + Sync {
     fn set_rate_limit(&self, _bytes_per_sec: u64) -> RateLimitSupport {
         RateLimitSupport::Unsupported
     }
+
+    /// Сесія (cookies, referer) для наступних `probe` / `run`.
+    ///
+    /// Не async: реалізація кладе значення в `Mutex`. Типово порожньо —
+    /// не кожен протокол ходить по HTTP (торент, зовнішній exe).
+    fn set_session(&self, _session: Session) {}
 
     /// Перевірити результат після завершення.
     ///
@@ -454,6 +518,7 @@ mod tests {
                     targets: vec![PathBuf::from("файл.bin")],
                     resume: None,
                     cancel: Cancel::new(),
+                    session: Session::default(),
                 },
                 &збирач,
             )
@@ -490,6 +555,7 @@ mod tests {
                     targets: vec![PathBuf::from("файл.bin")],
                     resume: Some(чужий_стан),
                     cancel: Cancel::new(),
+                    session: Session::default(),
                 },
                 &збирач,
             )
@@ -528,6 +594,38 @@ mod tests {
         let вміє = Пустушка::нова("вигадка", "вигадка://", 1);
         assert_eq!(вміє.set_rate_limit(5000), RateLimitSupport::Applied);
         assert_eq!(*вміє.обмеження.lock().unwrap(), Some(5000));
+    }
+
+    #[test]
+    fn debug_сесії_не_світить_cookie() {
+        let s = Session::from_parts(
+            Some("session=secret-token".to_owned()),
+            Some("https://example.test/page".to_owned()),
+        );
+        let text = format!("{s:?}");
+        assert!(
+            !text.contains("secret-token"),
+            "значення cookie потрапило в Debug: {text}"
+        );
+        assert!(
+            !text.contains("example.test"),
+            "значення referer потрапило в Debug: {text}"
+        );
+        assert!(text.contains("задано"), "{text}");
+    }
+
+    #[test]
+    fn порожній_рядок_це_відсутня_сесія() {
+        let s = Session::from_parts(Some("  ".to_owned()), Some(String::new()));
+        assert!(s.is_empty());
+        assert!(s.cookies.is_none());
+        assert!(s.referer.is_none());
+    }
+
+    #[test]
+    fn set_session_за_замовчуванням_нічого_не_ламає() {
+        let p = Пустушка::нова("x", "x://", 1);
+        p.set_session(Session::from_parts(Some("a=b".to_owned()), None));
     }
 
     #[test]

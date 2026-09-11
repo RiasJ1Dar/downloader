@@ -117,8 +117,15 @@ async fn dispatch(req: Request, engine: &Arc<Engine>) -> Response {
             tasks: engine.list(),
         },
 
-        Request::Add { url, dest, parts } => {
-            match engine.add(&url, dest.map(Into::into), parts).await {
+        Request::Add {
+            url,
+            dest,
+            parts,
+            cookies,
+            referer,
+        } => {
+            let session = downloader_core::protocol::Session::from_parts(cookies, referer);
+            match engine.add(&url, dest.map(Into::into), parts, session).await {
                 Ok(id) => Response::Added { id },
                 Err(e) => Response::Error {
                     code: ErrorCode::Internal,

@@ -17,11 +17,12 @@ use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
 use downloader_core::protocol::{
     Cancel, PlannedFile, Progress, ProgressSink, Protocol, RateLimitSupport, RunContext,
+    Session,
 };
 use downloader_ipc::protocol::{Event, Request, Response};
 use downloader_proto_hls::HlsProtocol;
 use downloader_proto_http::download::{Options, download_with_probe};
-use downloader_proto_http::probe::probe;
+use downloader_proto_http::probe::{probe, probe_with_session};
 use downloader_winutil::{motw, names, paths, текст_буфера};
 
 #[derive(Parser, Debug)]
@@ -62,6 +63,14 @@ enum Command {
         /// Як часто скидати стан на диск, у мілісекундах.
         #[arg(long, default_value_t = 2000)]
         checkpoint_ms: u64,
+
+        /// Cookie-заголовок: `n=v; n2=v2`.
+        #[arg(long)]
+        cookie: Option<String>,
+
+        /// Заголовок Referer.
+        #[arg(long)]
+        referer: Option<String>,
     },
 
     /// Показати, що відомо про посилання, нічого не качаючи.
@@ -93,6 +102,14 @@ enum Command {
         /// Скільки з'єднань.
         #[arg(short = 'n', long)]
         parts: Option<usize>,
+
+        /// Cookie-заголовок: `n=v; n2=v2`.
+        #[arg(long)]
+        cookie: Option<String>,
+
+        /// Заголовок Referer.
+        #[arg(long)]
+        referer: Option<String>,
     },
 
     /// Показати завдання ядра.
@@ -145,6 +162,8 @@ async fn main() -> Result<()> {
             clipboard,
             out,
             parts,
+            cookie,
+            referer,
         } => {
             let urls = зібрати_адреси(url, list, clipboard)?;
             let mut core = client::Client::connect().await?;
@@ -153,12 +172,21 @@ async fn main() -> Result<()> {
             } else {
                 None
             };
+            let session = Session::from_parts(cookie, referer);
+            if session.cookies.is_some() {
+                tracing::info!("cookie задано");
+            }
+            if session.referer.is_some() {
+                tracing::info!("referer задано");
+            }
             for url in urls {
                 let resp = core
                     .call(&Request::Add {
                         url: url.clone(),
                         dest: dest.clone(),
                         parts,
+                        cookies: session.cookies.clone(),
+                        referer: session.referer.clone(),
                     })
                     .await?;
                 match resp {
@@ -297,6 +325,8 @@ async fn main() -> Result<()> {
             min_chunk,
             limit_kb,
             checkpoint_ms,
+            cookie,
+            referer,
         } => {
             let urls = expand::розгорнути_шаблон(&url)?;
             if urls.len() != 1 {
@@ -306,12 +336,19 @@ async fn main() -> Result<()> {
                 );
             }
             let url = &urls[0];
+            let session = Session::from_parts(cookie, referer);
+            if session.cookies.is_some() {
+                tracing::info!("cookie задано");
+            }
+            if session.referer.is_some() {
+                tracing::info!("referer задано");
+            }
             let hls = HlsProtocol::new()?;
             if hls.handles(url) {
-                качати_hls(&hls, url, out, limit_kb).await?;
+                качати_hls(&hls, url, out, limit_kb, session).await?;
                 return Ok(());
             }
-            let info = probe(&client, url).await?;
+            let info = probe_with_session(&client, url, &session).await?;
 
             // Ім'я з мережі складала стороння людина: спершу знешкодити,
             // потім переконатись, що не затираємо чужий файл.
@@ -334,6 +371,7 @@ async fn main() -> Result<()> {
                 min_chunk,
                 rate_limit: limit_kb.saturating_mul(1024),
                 checkpoint_every: Duration::from_millis(checkpoint_ms),
+                session,
                 ..Options::default()
             };
 
@@ -461,6 +499,7 @@ async fn качати_hls(
     url: &str,
     out: Option<PathBuf>,
     limit_kb: u64,
+    session: Session,
 ) -> Result<()> {
     if limit_kb > 0 {
         match hls.set_rate_limit(limit_kb.saturating_mul(1024)) {
@@ -470,6 +509,7 @@ async fn качати_hls(
             }
         }
     }
+    hls.set_session(session.clone());
 
     let probed = hls.probe(url).await?;
     for f in probed.files.iter().filter(|f| f.selected) {
@@ -504,6 +544,7 @@ async fn качати_hls(
         targets: dests.clone(),
         resume: None,
         cancel: Cancel::new(),
+        session,
     };
     if hls.run(ctx, &НімийПрогрес).await?.is_some() {
         println!("завантаження HLS зупинено до завершення");
@@ -655,6 +696,54 @@ mod tests {
             } => assert!(u.contains("[001-002]")),
             other => panic!("не add шаблон: {other:?}"),
         }
+
+        match Cli::try_parse_from([
+            "dl",
+            "add",
+            "http://ex.com/a.bin",
+            "--cookie",
+            "n=v; n2=v2",
+            "--referer",
+            "http://ex.com/",
+        ])
+        .expect("add cookie")
+        {
+            Cli {
+                command: Command::Add {
+                    cookie,
+                    referer,
+                    ..
+                },
+            } => {
+                assert_eq!(cookie.as_deref(), Some("n=v; n2=v2"));
+                assert_eq!(referer.as_deref(), Some("http://ex.com/"));
+            }
+            other => panic!("не add --cookie: {other:?}"),
+        }
+
+        match Cli::try_parse_from([
+            "dl",
+            "get",
+            "http://ex.com/a.bin",
+            "--cookie",
+            "session=ok",
+            "--referer",
+            "http://ex.com/page",
+        ])
+        .expect("get cookie")
+        {
+            Cli {
+                command: Command::Get {
+                    cookie,
+                    referer,
+                    ..
+                },
+            } => {
+                assert_eq!(cookie.as_deref(), Some("session=ok"));
+                assert_eq!(referer.as_deref(), Some("http://ex.com/page"));
+            }
+            other => panic!("не get --cookie: {other:?}"),
+        }
     }
 
     fn planned(name: &str, selected: bool) -> PlannedFile {
@@ -738,7 +827,7 @@ mod tests {
         ));
         std::fs::create_dir_all(&dir).expect("тека");
         let dest = dir.join("out.ts");
-        качати_hls(&hls, &url, Some(dest.clone()), 0)
+        качати_hls(&hls, &url, Some(dest.clone()), 0, Session::default())
             .await
             .expect("get");
 

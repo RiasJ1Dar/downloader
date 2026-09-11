@@ -4,8 +4,9 @@
 //! погано саме так». Заготовки на кшталт «перевіримо, що працює» тут
 //! марні — рушій ламається саме на крайніх випадках.
 
+use downloader_core::protocol::Session;
 use downloader_proto_http::headers::RangeSupport;
-use downloader_proto_http::probe::probe;
+use downloader_proto_http::probe::{probe, probe_with_session};
 use downloader_testserver::EvilServer;
 use reqwest::Client;
 
@@ -119,6 +120,19 @@ async fn відмова_доступу_це_помилка_а_не_порожн�
     let text = err.to_string();
     assert!(text.contains("403"), "помилка не називає код: {text}");
 
+    s.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn cookie_і_referer_проходять_auth() -> anyhow::Result<()> {
+    let s = EvilServer::start().await?;
+    let session = Session::from_parts(
+        Some("other=1; session=ok; more=2".to_owned()),
+        Some("http://example.test/page".to_owned()),
+    );
+    let p = probe_with_session(&client(), &s.url("/auth/16k"), &session).await?;
+    assert_eq!(p.size, Some(16 * 1024));
     s.shutdown().await;
     Ok(())
 }

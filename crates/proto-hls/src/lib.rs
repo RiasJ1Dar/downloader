@@ -17,8 +17,9 @@ use async_trait::async_trait;
 use downloader_core::error::{Error, Result};
 use downloader_core::protocol::{
     Cancel, PlannedFile, Probed, Progress, ProgressSink, Protocol, RateLimitSupport,
-    ResumeBlob, RunContext,
+    ResumeBlob, RunContext, Session,
 };
+use downloader_proto_http::apply_session;
 use downloader_proto_http::download::{Options, download};
 use reqwest::Client;
 
@@ -32,6 +33,8 @@ use playlist::{
 pub struct HlsProtocol {
     client: Client,
     rate_limit: Mutex<u64>,
+    /// Для `probe`, де немає [`RunContext`]. `run` бере сесію з контексту.
+    session: Mutex<Session>,
 }
 
 impl HlsProtocol {
@@ -43,7 +46,15 @@ impl HlsProtocol {
         Ok(Self {
             client,
             rate_limit: Mutex::new(0),
+            session: Mutex::new(Session::default()),
         })
+    }
+
+    fn поточна_сесія(&self, ctx: Option<&Session>) -> Session {
+        match ctx {
+            Some(s) if !s.is_empty() => s.clone(),
+            _ => self.session.lock().map(|g| g.clone()).unwrap_or_default(),
+        }
     }
 }
 
@@ -58,7 +69,8 @@ impl Protocol for HlsProtocol {
     }
 
     async fn probe(&self, source: &str) -> Result<Probed> {
-        let body = fetch_text(&self.client, source).await?;
+        let session = self.поточна_сесія(None);
+        let body = fetch_text(&self.client, source, &session).await?;
         match розібрати(body.as_bytes(), source)? {
             Маніфест::Master { mut варіанти } => {
                 варіанти.sort_by_key(|v| v.bandwidth);
@@ -110,7 +122,8 @@ impl Protocol for HlsProtocol {
                 "ядро не дало жодного шляху для запису".to_owned(),
             ));
         }
-        let body = fetch_text(&self.client, &ctx.source).await?;
+        let session = self.поточна_сесія(Some(&ctx.session));
+        let body = fetch_text(&self.client, &ctx.source, &session).await?;
         let доріжки = розібрати_доріжки(body.as_bytes(), &ctx.source)?;
         // Якість — з першої відео-цілі, не audio-*/subs-*. Якщо всі targets
         // доріжки, відео з master не пишемо (немає куди), варіант не обираємо.
@@ -127,7 +140,7 @@ impl Protocol for HlsProtocol {
                         return Ok(None);
                     };
                     return self
-                        .тягнути_live(&ctx.source, m, dest, sink, &ctx.cancel)
+                        .тягнути_live(&ctx.source, m, dest, sink, &ctx.cancel, &session)
                         .await;
                 }
                 if let Some(dest) = video_dest {
@@ -135,7 +148,14 @@ impl Protocol for HlsProtocol {
                         return Err(Error::Store("media playlist без сегментів".to_owned()));
                     }
                     if let Some(blob) = self
-                        .тягнути_сегменти(&m.сегменти, dest, sink, &ctx.cancel, &mut done)
+                        .тягнути_сегменти(
+                            &m.сегменти,
+                            dest,
+                            sink,
+                            &ctx.cancel,
+                            &mut done,
+                            &session,
+                        )
                         .await?
                     {
                         return Ok(Some(blob));
@@ -146,12 +166,19 @@ impl Protocol for HlsProtocol {
                 варіанти.sort_by_key(|v| v.bandwidth);
                 if let Some(dest) = video_dest {
                     let обраний = обрати_варіант(&варіанти, dest)?;
-                    let media_txt = fetch_text(&self.client, &обраний.uri).await?;
+                    let media_txt = fetch_text(&self.client, &обраний.uri, &session).await?;
                     match розібрати(media_txt.as_bytes(), &обраний.uri)? {
                         Маніфест::Media(m) => {
                             if !m.end_list {
                                 return self
-                                    .тягнути_live(&обраний.uri, m, dest, sink, &ctx.cancel)
+                                    .тягнути_live(
+                                        &обраний.uri,
+                                        m,
+                                        dest,
+                                        sink,
+                                        &ctx.cancel,
+                                        &session,
+                                    )
                                     .await;
                             }
                             if m.сегменти.is_empty() {
@@ -166,6 +193,7 @@ impl Protocol for HlsProtocol {
                                     sink,
                                     &ctx.cancel,
                                     &mut done,
+                                    &session,
                                 )
                                 .await?
                             {
@@ -186,8 +214,15 @@ impl Protocol for HlsProtocol {
             }
         }
 
-        self.тягнути_додаткові(&ctx.targets, &доріжки, sink, &ctx.cancel, &mut done)
-            .await
+        self.тягнути_додаткові(
+            &ctx.targets,
+            &доріжки,
+            sink,
+            &ctx.cancel,
+            &mut done,
+            &session,
+        )
+        .await
     }
 
     fn set_rate_limit(&self, bytes_per_sec: u64) -> RateLimitSupport {
@@ -197,6 +232,13 @@ impl Protocol for HlsProtocol {
                 RateLimitSupport::Applied
             }
             Err(_) => RateLimitSupport::Unsupported,
+        }
+    }
+
+    fn set_session(&self, session: Session) {
+        match self.session.lock() {
+            Ok(mut g) => *g = session,
+            Err(_) => tracing::error!("сесія HLS отруєна, cookie не застосовано"),
         }
     }
 }
@@ -211,6 +253,7 @@ impl HlsProtocol {
         dest: &Path,
         sink: &dyn ProgressSink,
         cancel: &Cancel,
+        session: &Session,
     ) -> Result<Option<ResumeBlob>> {
         let tmp = dest.with_extension("hls-parts");
         std::fs::create_dir_all(&tmp)?;
@@ -233,8 +276,15 @@ impl HlsProtocol {
                 }
                 discontinuity |= seg.discontinuity;
                 let part = tmp.join(format!("seg-{}.bin", seg.sequence));
-                let bytes =
-                    качати_сегмент(&self.client, seg, &part, ліміт, &mut next_offset).await?;
+                let bytes = качати_сегмент(
+                    &self.client,
+                    seg,
+                    &part,
+                    ліміт,
+                    &mut next_offset,
+                    session,
+                )
+                .await?;
                 done += bytes.len() as u64;
                 sink.report(Progress::Advanced { done });
                 sink.report(Progress::Segments { count: seen.len() });
@@ -247,7 +297,7 @@ impl HlsProtocol {
             if cancel.is_cancelled() {
                 return Ok(Some(Vec::new()));
             }
-            медіа = match розібрати_медіа(&self.client, playlist_url, dest).await {
+            медіа = match розібрати_медіа(&self.client, playlist_url, dest, session).await {
                 Ok((m, _)) => {
                     підряд_помилок = 0;
                     m
@@ -288,6 +338,7 @@ impl HlsProtocol {
         sink: &dyn ProgressSink,
         cancel: &Cancel,
         done: &mut u64,
+        session: &Session,
     ) -> Result<Option<ResumeBlob>> {
         if сегменти.iter().any(|s| s.discontinuity) {
             tracing::warn!("EXT-X-DISCONTINUITY: склейка може мати зламані таймстемпи");
@@ -305,7 +356,15 @@ impl HlsProtocol {
                 return Ok(Some(Vec::new()));
             }
             let part = tmp.join(format!("seg-{i}.bin"));
-            let bytes = качати_сегмент(&self.client, seg, &part, ліміт, &mut next_offset).await?;
+            let bytes = качати_сегмент(
+                &self.client,
+                seg,
+                &part,
+                ліміт,
+                &mut next_offset,
+                session,
+            )
+            .await?;
             *done = done.saturating_add(bytes.len() as u64);
             sink.report(Progress::Advanced { done: *done });
             зібрані.push(part);
@@ -327,6 +386,7 @@ impl HlsProtocol {
         sink: &dyn ProgressSink,
         cancel: &Cancel,
         done: &mut u64,
+        session: &Session,
     ) -> Result<Option<ResumeBlob>> {
         for dest in targets {
             if !це_імʼя_доріжки(dest) {
@@ -346,7 +406,7 @@ impl HlsProtocol {
             match d.kind {
                 ТипДоріжки::Audio => {
                     if let Some(blob) = self
-                        .качати_vod_доріжку(uri, dest, sink, cancel, done)
+                        .качати_vod_доріжку(uri, dest, sink, cancel, done, session)
                         .await?
                     {
                         return Ok(Some(blob));
@@ -355,13 +415,13 @@ impl HlsProtocol {
                 ТипДоріжки::Subtitles => {
                     if схожий_на_hls(uri) {
                         if let Some(blob) = self
-                            .качати_vod_доріжку(uri, dest, sink, cancel, done)
+                            .качати_vod_доріжку(uri, dest, sink, cancel, done, session)
                             .await?
                         {
                             return Ok(Some(blob));
                         }
                     } else {
-                        let bytes = fetch_bytes(&self.client, uri).await?;
+                        let bytes = fetch_bytes(&self.client, uri, session).await?;
                         std::fs::write(dest, &bytes)?;
                         *done = done.saturating_add(bytes.len() as u64);
                         sink.report(Progress::Advanced { done: *done });
@@ -380,8 +440,9 @@ impl HlsProtocol {
         sink: &dyn ProgressSink,
         cancel: &Cancel,
         done: &mut u64,
+        session: &Session,
     ) -> Result<Option<ResumeBlob>> {
-        let txt = fetch_text(&self.client, playlist_url).await?;
+        let txt = fetch_text(&self.client, playlist_url, session).await?;
         match розібрати(txt.as_bytes(), playlist_url)? {
             Маніфест::Media(m) => {
                 if !m.end_list {
@@ -392,7 +453,7 @@ impl HlsProtocol {
                     tracing::warn!("media playlist без сегментів: {playlist_url}");
                     return Ok(None);
                 }
-                self.тягнути_сегменти(&m.сегменти, dest, sink, cancel, done)
+                self.тягнути_сегменти(&m.сегменти, dest, sink, cancel, done, session)
                     .await
             }
             Маніфест::Master { .. } => Err(Error::Store(format!(
@@ -410,14 +471,15 @@ async fn розібрати_медіа(
     client: &Client,
     source: &str,
     dest: &Path,
+    session: &Session,
 ) -> Result<(Медіа, String)> {
-    let body = fetch_text(client, source).await?;
+    let body = fetch_text(client, source, session).await?;
     match розібрати(body.as_bytes(), source)? {
         Маніфест::Media(m) => Ok((m, source.to_owned())),
         Маніфест::Master { mut варіанти } => {
             варіанти.sort_by_key(|v| v.bandwidth);
             let обраний = обрати_варіант(&варіанти, dest)?;
-            let media_txt = fetch_text(client, &обраний.uri).await?;
+            let media_txt = fetch_text(client, &обраний.uri, session).await?;
             match розібрати(media_txt.as_bytes(), &обраний.uri)? {
                 Маніфест::Media(m) => Ok((m, обраний.uri.clone())),
                 Маніфест::Master { .. } => Err(Error::Store(
@@ -469,15 +531,17 @@ async fn качати_сегмент(
     part: &Path,
     rate_limit: u64,
     next_offset: &mut u64,
+    session: &Session,
 ) -> Result<Vec<u8>> {
     let mut bytes = if let Some((length, offset)) = seg.byte_range {
         let start = offset.unwrap_or(*next_offset);
         *next_offset = start.saturating_add(length);
-        fetch_range(client, &seg.uri, start, length).await?
+        fetch_range(client, &seg.uri, start, length, session).await?
     } else {
         let opts = Options {
             parts: 1,
             rate_limit,
+            session: session.clone(),
             ..Options::default()
         };
         download(client, &seg.uri, part, &opts)
@@ -489,7 +553,7 @@ async fn качати_сегмент(
         match k.метод {
             crate::decrypt::МетодКлюча::Aes128 => {}
         }
-        let key_bytes = fetch_bytes(client, &k.uri).await?;
+        let key_bytes = fetch_bytes(client, &k.uri, session).await?;
         let iv = k.iv.unwrap_or_else(|| iv_з_sequence(seg.sequence));
         bytes = розшифрувати(&bytes, &key_bytes, &iv)?;
         std::fs::write(part, &bytes)?;
@@ -572,9 +636,8 @@ fn знайти_доріжку<'a>(доріжки: &'a [Доріжка], dest: &
     })
 }
 
-async fn fetch_text(client: &Client, url: &str) -> Result<String> {
-    let resp = client
-        .get(url)
+async fn fetch_text(client: &Client, url: &str, session: &Session) -> Result<String> {
+    let resp = apply_session(client.get(url), session)
         .send()
         .await
         .map_err(|e| Error::Store(format!("GET {url}: {e}")))?;
@@ -587,13 +650,18 @@ async fn fetch_text(client: &Client, url: &str) -> Result<String> {
         .map_err(|e| Error::Store(format!("тіло {url}: {e}")))
 }
 
-async fn fetch_range(client: &Client, url: &str, start: u64, length: u64) -> Result<Vec<u8>> {
+async fn fetch_range(
+    client: &Client,
+    url: &str,
+    start: u64,
+    length: u64,
+    session: &Session,
+) -> Result<Vec<u8>> {
     if length == 0 {
         return Ok(Vec::new());
     }
     let end = start.saturating_add(length).saturating_sub(1);
-    let resp = client
-        .get(url)
+    let resp = apply_session(client.get(url), session)
         .header(reqwest::header::RANGE, format!("bytes={start}-{end}"))
         .send()
         .await
@@ -635,9 +703,8 @@ async fn fetch_range(client: &Client, url: &str, start: u64, length: u64) -> Res
     Ok(bytes[start..end].to_vec())
 }
 
-async fn fetch_bytes(client: &Client, url: &str) -> Result<Vec<u8>> {
-    let resp = client
-        .get(url)
+async fn fetch_bytes(client: &Client, url: &str, session: &Session) -> Result<Vec<u8>> {
+    let resp = apply_session(client.get(url), session)
         .send()
         .await
         .map_err(|e| Error::Store(format!("GET {url}: {e}")))?;
@@ -757,6 +824,7 @@ mod tests {
                 targets: vec![dest.clone()],
                 resume: None,
                 cancel: Cancel::new(),
+                session: Session::default(),
             },
             &Німий,
         )
@@ -869,6 +937,7 @@ mod tests {
                 targets: vec![dest_video.clone(), dest_audio.clone(), dest_subs.clone()],
                 resume: None,
                 cancel: Cancel::new(),
+                session: Session::default(),
             },
             &Німий,
         )
@@ -913,6 +982,7 @@ mod tests {
                 targets: vec![dest.clone()],
                 resume: None,
                 cancel: Cancel::new(),
+                session: Session::default(),
             },
             &Німий,
         )
@@ -941,6 +1011,7 @@ mod tests {
                 targets: vec![dest.clone()],
                 resume: None,
                 cancel: Cancel::new(),
+                session: Session::default(),
             },
             &Німий,
         )
@@ -982,6 +1053,7 @@ mod tests {
                 targets: vec![dest.clone()],
                 resume: None,
                 cancel: Cancel::new(),
+                session: Session::default(),
             },
             &Німий,
         )
@@ -1010,6 +1082,7 @@ mod tests {
                 targets: vec![dest.clone()],
                 resume: None,
                 cancel: Cancel::new(),
+                session: Session::default(),
             },
             &Німий,
         )
@@ -1050,6 +1123,7 @@ mod tests {
                 targets: vec![dest.clone()],
                 resume: None,
                 cancel: Cancel::new(),
+                session: Session::default(),
             },
             &Німий,
         )

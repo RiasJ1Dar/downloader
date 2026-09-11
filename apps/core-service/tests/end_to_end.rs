@@ -128,6 +128,8 @@ async fn ядро_качає_файл_на_запит_клієнта() -> anyhow
             url: server.url(scenario),
             dest: Some(dest.display().to_string()),
             parts: Some(4),
+            cookies: None,
+            referer: None,
         },
     )
     .await?;
@@ -190,6 +192,8 @@ async fn ядро_качає_hls_vod() -> anyhow::Result<()> {
             url: server.url("/hls/vod/media.m3u8"),
             dest: Some(dest.display().to_string()),
             parts: None,
+            cookies: None,
+            referer: None,
         },
     )
     .await?;
@@ -236,6 +240,8 @@ async fn клієнт_бачить_завдання_у_списку() -> anyhow:
             url: server.url("/slow-range/1m/256k"),
             dest: Some(ядро.data.join("повільне.bin").display().to_string()),
             parts: Some(2),
+            cookies: None,
+            referer: None,
         },
     )
     .await?;

@@ -8,11 +8,23 @@
 
 use crate::headers::{ContentRange, RangeSupport, Validator, filename_from_disposition,
     filename_from_url};
+use downloader_core::protocol::Session;
 use reqwest::header::{
-    ACCEPT_RANGES, CONTENT_DISPOSITION, CONTENT_LENGTH, CONTENT_RANGE, ETAG, HeaderMap,
-    LAST_MODIFIED, RANGE,
+    ACCEPT_RANGES, CONTENT_DISPOSITION, CONTENT_LENGTH, CONTENT_RANGE, COOKIE, ETAG, HeaderMap,
+    LAST_MODIFIED, RANGE, REFERER,
 };
-use reqwest::{Client, StatusCode};
+use reqwest::{Client, RequestBuilder, StatusCode};
+
+/// Накласти Cookie / Referer на запит. Порожня сесія нічого не змінює.
+pub fn apply_session(mut req: RequestBuilder, session: &Session) -> RequestBuilder {
+    if let Some(c) = session.cookies.as_deref() {
+        req = req.header(COOKIE, c);
+    }
+    if let Some(r) = session.referer.as_deref() {
+        req = req.header(REFERER, r);
+    }
+    req
+}
 
 /// Що ми дізнались про ресурс перед качанням.
 #[derive(Debug, Clone)]
@@ -83,7 +95,16 @@ pub enum ProbeError {
 /// **одночасно доводить підтримку `Range`**: `206` з `Content-Range` — це
 /// доказ, а не обіцянка.
 pub async fn probe(client: &Client, url: &str) -> Result<Probe, ProbeError> {
-    probe_with_retries(client, url, 3).await
+    probe_with_session(client, url, &Session::default()).await
+}
+
+/// Те саме з cookies / Referer завдання.
+pub async fn probe_with_session(
+    client: &Client,
+    url: &str,
+    session: &Session,
+) -> Result<Probe, ProbeError> {
+    probe_with_retries(client, url, session, 3).await
 }
 
 /// Проба з повторами на тимчасових відмовах.
@@ -94,12 +115,13 @@ pub async fn probe(client: &Client, url: &str) -> Result<Probe, ProbeError> {
 pub async fn probe_with_retries(
     client: &Client,
     url: &str,
+    session: &Session,
     attempts: u32,
 ) -> Result<Probe, ProbeError> {
     let mut last = None;
 
     for attempt in 0..attempts.max(1) {
-        match probe_once(client, url).await {
+        match probe_once(client, url, session).await {
             Ok(p) => return Ok(p),
             Err(err) if is_temporary(&err) => {
                 if attempt + 1 < attempts {
@@ -130,25 +152,33 @@ const fn is_temporary(err: &ProbeError) -> bool {
     }
 }
 
-async fn probe_once(client: &Client, url: &str) -> Result<Probe, ProbeError> {
-    if let Some(probe) = try_head(client, url).await? {
+async fn probe_once(
+    client: &Client,
+    url: &str,
+    session: &Session,
+) -> Result<Probe, ProbeError> {
+    if let Some(probe) = try_head(client, url, session).await? {
         // `HEAD` не доводить `Range` — сервер міг збрехати. Якщо він заявив
         // підтримку, перевіряємо пробним байтом; якщо промовчав — тим паче.
-        if probe.declared != RangeSupport::None && probe.size.is_some_and(|s| s > 1) {
-            if let Ok(ranged) = try_ranged_get(client, url).await {
-                return Ok(merge(probe, ranged));
-            }
+        if probe.declared != RangeSupport::None
+            && probe.size.is_some_and(|s| s > 1)
+            && let Ok(ranged) = try_ranged_get(client, url, session).await
+        {
+            return Ok(merge(probe, ranged));
         }
         return Ok(probe);
     }
 
-    try_ranged_get(client, url).await
+    try_ranged_get(client, url, session).await
 }
 
 /// `HEAD`. `None` означає «сервер його не тримає», а не помилку.
-async fn try_head(client: &Client, url: &str) -> Result<Option<Probe>, ProbeError> {
-    let resp = client
-        .head(url)
+async fn try_head(
+    client: &Client,
+    url: &str,
+    session: &Session,
+) -> Result<Option<Probe>, ProbeError> {
+    let resp = apply_session(client.head(url), session)
         .send()
         .await
         .map_err(|source| ProbeError::Network {
@@ -182,9 +212,12 @@ async fn try_head(client: &Client, url: &str) -> Result<Option<Probe>, ProbeErro
 
 /// `GET` з `Range: bytes=0-0`. Найчесніший спосіб: відповідь `206` з
 /// `Content-Range` одночасно дає і розмір, і доказ підтримки діапазонів.
-async fn try_ranged_get(client: &Client, url: &str) -> Result<Probe, ProbeError> {
-    let resp = client
-        .get(url)
+async fn try_ranged_get(
+    client: &Client,
+    url: &str,
+    session: &Session,
+) -> Result<Probe, ProbeError> {
+    let resp = apply_session(client.get(url), session)
         .header(RANGE, "bytes=0-0")
         .send()
         .await

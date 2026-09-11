@@ -3,6 +3,7 @@
 //! Головна перевірка кожного тесту — **SHA-256 файла на диску**. Розмір і
 //! статус нічого не доводять: биті дані зазвичай мають правильну довжину.
 
+use downloader_core::protocol::Session;
 use downloader_proto_http::download::{DownloadError, Options, download};
 use downloader_testserver::{EvilServer, expected_sha256};
 use reqwest::Client;
@@ -48,11 +49,8 @@ fn opts(parts: usize) -> Options {
         // відбувалась нарізка й крадіжка.
         min_chunk: 4096,
         max_retries: 4,
-        rate_limit: 0,
-        cancel: None,
-        on_progress: None,
-        // Часто, щоб тест устиг зробити чекпоінт до перерви.
         checkpoint_every: std::time::Duration::from_millis(50),
+        ..Options::default()
     }
 }
 
@@ -71,6 +69,23 @@ async fn вісім_сегментів_складаються_в_той_сами
         "склеєний з восьми шматків файл мусить збігатися побайтово"
     );
 
+    s.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn cookie_і_referer_проходять_auth() -> anyhow::Result<()> {
+    let s = EvilServer::start().await?;
+    let tmp = Temp::new("auth");
+    let opts = Options {
+        session: Session::from_parts(
+            Some("other=1; session=ok; more=2".to_owned()),
+            Some("http://example.test/page".to_owned()),
+        ),
+        ..opts(4)
+    };
+    download(&client(), &s.url("/auth/16k"), &tmp.0, &opts).await?;
+    assert_eq!(sha256_of(&tmp.0)?, expected_sha256("/auth/16k")?);
     s.shutdown().await;
     Ok(())
 }

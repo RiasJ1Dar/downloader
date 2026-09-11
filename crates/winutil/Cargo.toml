@@ -1,6 +1,6 @@
 [package]
 name = "downloader-winutil"
-description = "Windows-специфіка: Mark-of-the-Web, довгі шляхи, безпечні імена файлів, буфер обміну"
+description = "Windows-специфіка: Mark-of-the-Web, довгі шляхи, безпечні імена файлів, буфер обміну, вільне місце"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -9,6 +9,7 @@ license.workspace = true
 [dependencies]
 thiserror.workspace = true
 tracing.workspace = true
+fs2.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 clipboard-win.workspace = true
