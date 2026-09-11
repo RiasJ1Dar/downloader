@@ -1,0 +1,9 @@
+{
+  "name": "com.downloader.host",
+  "description": "Downloader native messaging host",
+  "path": "DOWNLOADER_NMHOST_EXE",
+  "type": "stdio",
+  "allowed_origins": [
+    "chrome-extension://PUT_UNPACKED_EXTENSION_ID_HERE/"
+  ]
+}

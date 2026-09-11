@@ -1,0 +1,12 @@
+{
+  "manifest_version": 3,
+  "name": "Downloader",
+  "version": "0.1.0",
+  "description": "Перехоплює завантаження і віддає ядру Downloader через native messaging. Без локального HTTP-порту.",
+  "minimum_chrome_version": "116",
+  "permissions": ["downloads", "nativeMessaging", "cookies"],
+  "host_permissions": ["http://*/*", "https://*/*"],
+  "background": {
+    "service_worker": "background.js"
+  }
+}

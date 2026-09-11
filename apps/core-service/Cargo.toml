@@ -16,6 +16,7 @@ downloader-ipc.workspace = true
 downloader-proto-http.workspace = true
 downloader-proto-hls.workspace = true
 downloader-proto-dash.workspace = true
+downloader-proto-ytdlp.workspace = true
 downloader-winutil.workspace = true
 anyhow.workspace = true
 clap.workspace = true

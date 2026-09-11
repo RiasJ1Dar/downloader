@@ -551,6 +551,7 @@ dependencies = [
  "downloader-proto-dash",
  "downloader-proto-hls",
  "downloader-proto-http",
+ "downloader-proto-ytdlp",
  "downloader-testserver",
  "downloader-winutil",
  "hex",
@@ -585,6 +586,7 @@ dependencies = [
  "downloader-proto-dash",
  "downloader-proto-hls",
  "downloader-proto-http",
+ "downloader-proto-ytdlp",
  "downloader-testserver",
  "downloader-winutil",
  "hex",
@@ -605,6 +607,19 @@ dependencies = [
  "thiserror 2.0.20",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "downloader-nmhost"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "downloader-ipc",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

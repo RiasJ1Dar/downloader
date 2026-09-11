@@ -94,6 +94,7 @@ async fn main() -> anyhow::Result<()> {
     let mut registry = downloader_core::protocol::Registry::new();
     registry.register(Box::new(downloader_proto_hls::HlsProtocol::new()?));
     registry.register(Box::new(downloader_proto_dash::DashProtocol::new()?));
+    registry.register(Box::new(downloader_proto_ytdlp::YtdlpProtocol::new()));
     registry.register(Box::new(downloader_proto_http::HttpProtocol::new(8)?));
 
     let engine = engine::Engine::new(&db, downloads.clone(), registry)?;

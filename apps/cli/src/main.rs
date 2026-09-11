@@ -22,6 +22,7 @@ use downloader_core::protocol::{
 use downloader_ipc::protocol::{Event, Request, Response};
 use downloader_proto_dash::DashProtocol;
 use downloader_proto_hls::HlsProtocol;
+use downloader_proto_ytdlp::YtdlpProtocol;
 use downloader_proto_http::download::{Options, download_with_probe};
 use downloader_proto_http::probe::{probe, probe_with_session};
 use downloader_winutil::{motw, names, paths, текст_буфера};
@@ -299,6 +300,10 @@ async fn main() -> Result<()> {
                 if dash.handles(&url) {
                     показати_модуль(&dash, &url).await?;
                 } else {
+                    let yt = YtdlpProtocol::new();
+                    if yt.handles(&url) {
+                        показати_модуль(&yt, &url).await?;
+                    } else {
                 let info = probe(&client, &url).await?;
 
                 println!("адреса:      {}", info.final_url);
@@ -320,6 +325,7 @@ async fn main() -> Result<()> {
                     "ім'я:        {}",
                     info.filename().unwrap_or_else(|| "невідоме".to_owned())
                 );
+                    }
                 }
             }
         }
@@ -357,6 +363,11 @@ async fn main() -> Result<()> {
             let dash = DashProtocol::new()?;
             if dash.handles(url) {
                 качати_модулем(&dash, url, out, limit_kb, session).await?;
+                return Ok(());
+            }
+            let yt = YtdlpProtocol::new();
+            if yt.handles(url) {
+                качати_модулем(&yt, url, out, limit_kb, session).await?;
                 return Ok(());
             }
             let info = probe_with_session(&client, url, &session).await?;
@@ -763,6 +774,14 @@ mod tests {
             size: None,
             selected,
         }
+    }
+
+    #[test]
+    fn youtube_впізнає_ytdlp_не_http() {
+        let p = YtdlpProtocol::new();
+        assert!(p.handles("https://www.youtube.com/watch?v=abc"));
+        assert!(p.handles("https://youtu.be/abc"));
+        assert!(!p.handles("https://cdn.example/video.mp4"));
     }
 
     #[test]

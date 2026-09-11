@@ -12,6 +12,7 @@ members = [
     "crates/testserver",
     "apps/cli",
     "apps/core-service",
+    "apps/nmhost",
 ]
 
 [workspace.package]
