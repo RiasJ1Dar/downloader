@@ -423,6 +423,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "downloader-proto-external"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "downloader-core",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "downloader-proto-hls"
 version = "0.1.0"
 dependencies = [

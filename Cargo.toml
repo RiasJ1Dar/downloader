@@ -5,6 +5,7 @@ members = [
     "crates/ipc",
     "crates/proto-http",
     "crates/proto-hls",
+    "crates/proto-external",
     "crates/winutil",
     "crates/testserver",
     "apps/cli",
@@ -23,6 +24,7 @@ downloader-core = { path = "crates/core" }
 downloader-testserver = { path = "crates/testserver" }
 downloader-proto-http = { path = "crates/proto-http" }
 downloader-proto-hls = { path = "crates/proto-hls" }
+downloader-proto-external = { path = "crates/proto-external" }
 downloader-winutil = { path = "crates/winutil" }
 downloader-ipc = { path = "crates/ipc" }
 
