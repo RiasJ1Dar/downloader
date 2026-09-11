@@ -190,7 +190,10 @@ fn вбивство_до_першого_чекпоінта_не_псує_нас�
     убити_і_докачати(&url, &tmp.0, Duration::from_millis(20))?;
 
     let mut child = запустити_качання(&url, &tmp.0)?;
-    assert!(child.wait()?.success(), "друга спроба мала завершитись успіхом");
+    assert!(
+        child.wait()?.success(),
+        "друга спроба мала завершитись успіхом"
+    );
 
     assert_eq!(
         sha256_of(&tmp.0)?,
@@ -218,7 +221,14 @@ fn завантажений_файл_позначено_як_отриманий_
         .arg(server.url(scenario))
         .arg("--out")
         .arg(&tmp.0)
-        .args(["--parts", "4", "--min-chunk", "4096", "--checkpoint-ms", "50"])
+        .args([
+            "--parts",
+            "4",
+            "--min-chunk",
+            "4096",
+            "--checkpoint-ms",
+            "50",
+        ])
         .output()?;
 
     assert!(

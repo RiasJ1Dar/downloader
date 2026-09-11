@@ -109,7 +109,7 @@ mod tests {
 
     impl Drop for TempDir {
         fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
+            drop(std::fs::remove_dir_all(&self.0));
         }
     }
 
@@ -196,7 +196,10 @@ mod tests {
         let out = long_path(Path::new(&long)).display().to_string();
 
         assert!(out.starts_with("\\\\?\\UNC\\"), "{out}");
-        assert!(!out.starts_with("\\\\?\\\\\\"), "подвійний слеш лишився: {out}");
+        assert!(
+            !out.starts_with("\\\\?\\\\\\"),
+            "подвійний слеш лишився: {out}"
+        );
     }
 
     #[cfg(windows)]

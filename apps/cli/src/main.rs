@@ -8,16 +8,17 @@
 //! самим, яким потім буде вікно.
 
 mod client;
+mod expand;
 
 use std::path::PathBuf;
 use std::time::Duration;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
 use downloader_ipc::protocol::{Event, Request, Response};
 use downloader_proto_http::download::{Options, download_with_probe};
 use downloader_proto_http::probe::probe;
-use downloader_winutil::{motw, names, paths};
+use downloader_winutil::{motw, names, paths, текст_буфера};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -70,10 +71,18 @@ enum Command {
     /// На відміну від `get`, завдання переживе закриття цього вікна консолі:
     /// качає ядро, а не ми.
     Add {
-        /// Посилання.
-        url: String,
+        /// Посилання. Можна шаблон `file[001-010].zip`.
+        url: Option<String>,
 
-        /// Куди зберегти.
+        /// Файл зі списком адрес (рядки, `#` — коментар).
+        #[arg(long, conflicts_with = "clipboard")]
+        list: Option<PathBuf>,
+
+        /// Взяти адреси з буфера обміну.
+        #[arg(long)]
+        clipboard: bool,
+
+        /// Куди зберегти. Для кількох адрес ігнорується (ядро саме іменує).
         #[arg(short, long)]
         out: Option<PathBuf>,
 
@@ -126,21 +135,33 @@ async fn main() -> Result<()> {
         .context("не вдалося створити HTTP-клієнт")?;
 
     match cli.command {
-        Command::Add { url, out, parts } => {
+        Command::Add {
+            url,
+            list,
+            clipboard,
+            out,
+            parts,
+        } => {
+            let urls = зібрати_адреси(url, list, clipboard)?;
             let mut core = client::Client::connect().await?;
-
-            let resp = core
-                .call(&Request::Add {
-                    url: url.clone(),
-                    dest: out.map(|p| p.display().to_string()),
-                    parts,
-                })
-                .await?;
-
-            match resp {
-                Response::Added { id } => println!("завдання {id} прийнято ядром"),
-                Response::Error { message, .. } => anyhow::bail!(message),
-                other => anyhow::bail!("несподівана відповідь ядра: {other:?}"),
+            let dest = if urls.len() == 1 {
+                out.map(|p| p.display().to_string())
+            } else {
+                None
+            };
+            for url in urls {
+                let resp = core
+                    .call(&Request::Add {
+                        url: url.clone(),
+                        dest: dest.clone(),
+                        parts,
+                    })
+                    .await?;
+                match resp {
+                    Response::Added { id } => println!("завдання {id} прийнято ядром: {url}"),
+                    Response::Error { message, .. } => anyhow::bail!(message),
+                    other => anyhow::bail!("несподівана відповідь ядра: {other:?}"),
+                }
             }
         }
 
@@ -268,7 +289,15 @@ async fn main() -> Result<()> {
             limit_kb,
             checkpoint_ms,
         } => {
-            let info = probe(&client, &url).await?;
+            let urls = expand::розгорнути_шаблон(&url)?;
+            if urls.len() != 1 {
+                anyhow::bail!(
+                    "шаблон дає {} адрес — для пакета скористайтесь `dl add`",
+                    urls.len()
+                );
+            }
+            let url = &urls[0];
+            let info = probe(&client, url).await?;
 
             // Ім'я з мережі складала стороння людина: спершу знешкодити,
             // потім переконатись, що не затираємо чужий файл.
@@ -336,6 +365,43 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
+/// Зібрати адреси з аргумента, файла-списку або буфера обміну й розгорнути шаблони.
+fn зібрати_адреси(
+    url: Option<String>,
+    list: Option<PathBuf>,
+    clipboard: bool,
+) -> Result<Vec<String>> {
+    let mut блоки = Vec::new();
+    if clipboard {
+        блоки.push(текст_буфера()?);
+    }
+    if let Some(path) = list {
+        let text = std::fs::read_to_string(&path)
+            .with_context(|| format!("не прочитати список {}", path.display()))?;
+        блоки.push(text);
+    }
+    if let Some(u) = url {
+        блоки.push(u);
+    }
+    if блоки.is_empty() {
+        bail!("вкажіть посилання, --list або --clipboard");
+    }
+    let mut out = Vec::new();
+    for блок in блоки {
+        for line in блок.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            out.extend(expand::розгорнути_шаблон(line)?);
+        }
+    }
+    if out.is_empty() {
+        bail!("після розгортання не лишилось жодної адреси");
+    }
+    Ok(out)
+}
+
 /// Розмір у зрозумілому вигляді.
 fn format_size(bytes: u64) -> String {
     const ОДИНИЦІ: [&str; 5] = ["Б", "КБ", "МБ", "ГБ", "ТБ"];
@@ -395,6 +461,29 @@ mod tests {
                 assert!(!with_file);
             }
             other => panic!("не rm: {other:?}"),
+        }
+
+        match Cli::try_parse_from(["dl", "add", "--clipboard"]).expect("clipboard") {
+            Cli {
+                command: Command::Add {
+                    clipboard: true,
+                    url: None,
+                    list: None,
+                    ..
+                },
+            } => {}
+            other => panic!("не add --clipboard: {other:?}"),
+        }
+
+        match Cli::try_parse_from(["dl", "add", "http://ex.com/a[001-002].zip"]).expect("шаблон") {
+            Cli {
+                command: Command::Add {
+                    url: Some(u),
+                    clipboard: false,
+                    ..
+                },
+            } => assert!(u.contains("[001-002]")),
+            other => panic!("не add шаблон: {other:?}"),
         }
     }
 }

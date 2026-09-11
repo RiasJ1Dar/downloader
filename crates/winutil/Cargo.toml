@@ -1,6 +1,6 @@
 [package]
 name = "downloader-winutil"
-description = "Windows-специфіка: Mark-of-the-Web, довгі шляхи, безпечні імена файлів"
+description = "Windows-специфіка: Mark-of-the-Web, довгі шляхи, безпечні імена файлів, буфер обміну"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -9,6 +9,9 @@ license.workspace = true
 [dependencies]
 thiserror.workspace = true
 tracing.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+clipboard-win.workspace = true
 
 [lints.rust]
 unsafe_code = "deny"

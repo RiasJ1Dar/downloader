@@ -53,6 +53,9 @@ hex = "0.4"
 flate2 = "1"
 rand = "0.9"
 
+# Windows-специфіка winutil (BSL-1.0, permissive як MIT)
+clipboard-win = "5"
+
 [profile.release]
 opt-level = 3
 lto = "thin"

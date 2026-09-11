@@ -144,9 +144,7 @@ pub fn sanitize(raw: &str) -> String {
 fn обійти_імʼя_пристрою(name: &str) -> String {
     let (stem, ext) = розділити(name);
 
-    let is_device = ПРИСТРОЇ
-        .iter()
-        .any(|d| stem.eq_ignore_ascii_case(d));
+    let is_device = ПРИСТРОЇ.iter().any(|d| stem.eq_ignore_ascii_case(d));
 
     if is_device {
         match ext {
@@ -211,7 +209,9 @@ fn обрізати_по_символах(s: &str, limit: usize) -> String {
 fn розділити(name: &str) -> (&str, Option<&str>) {
     match name.rsplit_once('.') {
         // Крапка на початку — це прихований файл, а не розширення.
-        Some((stem, ext)) if !stem.is_empty() && схоже_на_розширення(ext) => (stem, Some(ext)),
+        Some((stem, ext)) if !stem.is_empty() && схоже_на_розширення(ext) => {
+            (stem, Some(ext))
+        }
         _ => (name, None),
     }
 }
@@ -287,7 +287,11 @@ mod tests {
     #[test]
     fn схоже_на_пристрій_але_не_воно() {
         assert_eq!(sanitize("CONSOLE.txt"), "CONSOLE.txt");
-        assert_eq!(sanitize("COM10.log"), "COM10.log", "COM10 не зарезервований");
+        assert_eq!(
+            sanitize("COM10.log"),
+            "COM10.log",
+            "COM10 не зарезервований"
+        );
     }
 
     #[test]
@@ -303,7 +307,11 @@ mod tests {
         let long = format!("{}.pdf", "я".repeat(300));
         let out = sanitize(&long);
 
-        assert!(out.len() <= МАКС_БАЙТІВ, "ім'я довше за ліміт: {}", out.len());
+        assert!(
+            out.len() <= МАКС_БАЙТІВ,
+            "ім'я довше за ліміт: {}",
+            out.len()
+        );
         assert!(
             out.ends_with(".pdf"),
             "розширення втрачено — система не знатиме, чим відкривати: {out}"
@@ -339,7 +347,10 @@ mod tests {
     #[test]
     fn задовгий_хвіст_не_розширення() {
         let (_, ext) = розділити("файл.цедужедовгийхвіст");
-        assert_eq!(ext, None, "дев'ять і більше символів — це вже не розширення");
+        assert_eq!(
+            ext, None,
+            "дев'ять і більше символів — це вже не розширення"
+        );
     }
 
     #[test]
@@ -376,7 +387,10 @@ mod tests {
         assert_eq!(extension_for_mime("audio/flac"), Some("flac"));
         assert_eq!(extension_for_mime("audio/webm"), Some("weba"));
         assert_eq!(extension_for_mime("video/x-msvideo"), Some("avi"));
-        assert_eq!(extension_for_mime("application/x-7z-compressed"), Some("7z"));
+        assert_eq!(
+            extension_for_mime("application/x-7z-compressed"),
+            Some("7z")
+        );
         assert_eq!(extension_for_mime("application/x-tar"), Some("tar"));
         assert_eq!(extension_for_mime("application/wasm"), Some("wasm"));
         assert_eq!(extension_for_mime("image/svg+xml"), Some("svg"));
@@ -388,10 +402,7 @@ mod tests {
 
     #[test]
     fn параметр_після_крапки_з_комою_ігнорується_для_vtt() {
-        assert_eq!(
-            extension_for_mime("text/vtt; charset=utf-8"),
-            Some("vtt")
-        );
+        assert_eq!(extension_for_mime("text/vtt; charset=utf-8"), Some("vtt"));
     }
 
     #[test]
@@ -414,7 +425,11 @@ mod tests {
         assert_eq!(розділити("архів.tar.gz").1, Some("gz"));
         assert_eq!(розділити("відео.mp4").1, Some("mp4"));
         assert_eq!(розділити("книга.epub").1, Some("epub"));
-        assert_eq!(розділити("шрифт.woff2").1, Some("woff2"), "цифра всередині — це нормально");
+        assert_eq!(
+            розділити("шрифт.woff2").1,
+            Some("woff2"),
+            "цифра всередині — це нормально"
+        );
     }
 
     #[test]

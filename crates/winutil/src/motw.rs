@@ -69,7 +69,11 @@ pub enum MotwError {
 /// на диску й цілий. Але й мовчати не можна — повертаємо помилку, щоб
 /// викликач вирішив сам і записав це в журнал.
 #[cfg(windows)]
-pub fn mark(path: &Path, source_url: Option<&str>, referrer: Option<&str>) -> Result<(), MotwError> {
+pub fn mark(
+    path: &Path,
+    source_url: Option<&str>,
+    referrer: Option<&str>,
+) -> Result<(), MotwError> {
     use std::io::Write as _;
 
     let stream = format!("{}:Zone.Identifier", path.display());
@@ -156,7 +160,7 @@ mod tests {
 
     impl Drop for Temp {
         fn drop(&mut self) {
-            let _ = std::fs::remove_file(&self.0);
+            drop(std::fs::remove_file(&self.0));
         }
     }
 
@@ -187,8 +191,14 @@ mod tests {
         .unwrap();
 
         let text = read_mark(&tmp.0).unwrap();
-        assert!(text.contains("HostUrl=https://cdn.example.com/f.bin"), "{text}");
-        assert!(text.contains("ReferrerUrl=https://example.com/page"), "{text}");
+        assert!(
+            text.contains("HostUrl=https://cdn.example.com/f.bin"),
+            "{text}"
+        );
+        assert!(
+            text.contains("ReferrerUrl=https://example.com/page"),
+            "{text}"
+        );
         assert!(text.contains("ZoneId=3"), "{text}");
     }
 
