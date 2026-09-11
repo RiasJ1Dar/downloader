@@ -23,7 +23,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use downloader_core::protocol::{
-    Cancel, PlannedFile, Progress, ProgressSink, Registry, RunContext, Session,
+    Cancel, PlannedFile, Progress, ProgressSink, RateLimitSupport, Registry, RunContext,
+    Session,
 };
 use downloader_core::store::{NewFile, NewTask, Status, Store};
 use downloader_ipc::protocol::{Event, TaskView};
@@ -57,6 +58,8 @@ struct Live {
     /// Cookies / Referer цього завдання. Лише в пам'яті: пауза/продовження
     /// в тому самому процесі їх зберігає; після рестарту ядра — порожньо.
     session: Session,
+    protocol: String,
+    targets: Vec<PathBuf>,
 }
 
 impl Live {
@@ -137,6 +140,8 @@ pub struct Engine {
     cancels: Mutex<HashMap<i64, Cancel>>,
     /// Тека за замовчуванням, коли клієнт не сказав, куди класти.
     downloads_dir: PathBuf,
+    /// Скільки завдань качати одночасно. Решта чекають у `queued`.
+    max_concurrent: usize,
 }
 
 impl Engine {
@@ -156,6 +161,12 @@ impl Engine {
 
         tracing::info!(модулі = ?registry.names(), "реєстр протоколів");
 
+        let max_concurrent = std::env::var("DOWNLOADER_MAX_CONCURRENT")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .filter(|&n: &usize| n >= 1)
+            .unwrap_or(3);
+
         let engine = Arc::new(Self {
             store: Mutex::new(store),
             live: Arc::new(Mutex::new(HashMap::new())),
@@ -163,6 +174,7 @@ impl Engine {
             registry,
             cancels: Mutex::new(HashMap::new()),
             downloads_dir,
+            max_concurrent,
         });
 
         engine.clone().start_ticker();
@@ -266,6 +278,16 @@ impl Engine {
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_else(|| names::ЗАПАСНЕ_ІМʼЯ.to_owned());
 
+        let start_now = {
+            let Ok(live) = self.live.lock() else {
+                anyhow::bail!("список завдань отруєно");
+            };
+            live.values()
+                .filter(|t| t.status == Status::Running)
+                .count()
+                < self.max_concurrent
+        };
+
         if let Ok(mut live) = self.live.lock() {
             live.insert(
                 id,
@@ -273,7 +295,11 @@ impl Engine {
                     id,
                     url: probed.final_url.clone(),
                     name,
-                    status: Status::Running,
+                    status: if start_now {
+                        Status::Running
+                    } else {
+                        Status::Queued
+                    },
                     done: 0,
                     total: probed.total_size,
                     segments: 0,
@@ -281,13 +307,25 @@ impl Engine {
                     prev_done: 0,
                     speed: 0,
                     session: session.clone(),
+                    protocol: protocol_name.clone(),
+                    targets: targets.clone(),
                 },
             );
         }
 
-        self.set_status(id, Status::Running, None);
-        self.clone()
-            .spawn_download(id, protocol_name, probed.final_url, targets, session);
+        if start_now {
+            self.set_status(id, Status::Running, None);
+            self.clone().spawn_download(
+                id,
+                protocol_name,
+                probed.final_url,
+                targets,
+                session,
+            );
+        } else {
+            self.set_status(id, Status::Queued, None);
+            tracing::info!(id, "завдання в черзі (стеля {n} одночасних)", n = self.max_concurrent);
+        }
         Ok(id)
     }
 
@@ -317,6 +355,18 @@ impl Engine {
                 c.insert(id, cancel.clone());
             }
 
+            if let Ok(n) = std::env::var("DOWNLOADER_RATE_LIMIT")
+                && let Ok(limit) = n.parse::<u64>()
+                && limit > 0
+            {
+                match module.set_rate_limit(limit) {
+                    RateLimitSupport::Applied => {}
+                    RateLimitSupport::Unsupported => {
+                        tracing::debug!(id, "модуль не вміє ліміт швидкості");
+                    }
+                }
+            }
+
             module.set_session(session.clone());
             let ctx = RunContext {
                 task_id: id,
@@ -332,6 +382,7 @@ impl Engine {
                 // завершення й не помилка.
                 Ok(Some(_resume)) => {
                     self.pause_finished(id);
+                    self.clone().спробувати_наступне();
                 }
 
                 Ok(None) => {
@@ -359,11 +410,49 @@ impl Engine {
                         .map(|p| p.display().to_string())
                         .unwrap_or_default();
                     let _ = self.events.send(Event::Finished { id, path, bytes });
+                    self.clone().спробувати_наступне();
                 }
 
-                Err(e) => self.fail(id, &e.to_string()),
+                Err(e) => {
+                    self.fail(id, &e.to_string());
+                    self.clone().спробувати_наступне();
+                }
             }
         });
+    }
+
+    /// Якщо є вільний слот — зняти найстаріше queued і запустити.
+    fn спробувати_наступне(self: Arc<Self>) {
+        let job = {
+            let Ok(mut live) = self.live.lock() else {
+                return;
+            };
+            let running = live
+                .values()
+                .filter(|t| t.status == Status::Running)
+                .count();
+            if running >= self.max_concurrent {
+                return;
+            }
+            let Some(next_id) = id_наступного_в_черзі(&live) else {
+                return;
+            };
+            let Some(task) = live.get_mut(&next_id) else {
+                return;
+            };
+            task.status = Status::Running;
+            task.error = None;
+            (
+                task.id,
+                task.protocol.clone(),
+                task.url.clone(),
+                task.targets.clone(),
+                task.session.clone(),
+            )
+        };
+        let (id, protocol, url, targets, session) = job;
+        self.set_status(id, Status::Running, None);
+        self.spawn_download(id, protocol, url, targets, session);
     }
 
     /// Зупинити завдання на прохання людини.
@@ -413,16 +502,38 @@ impl Engine {
             Err(_) => Session::default(),
         };
 
+        let start_now = {
+            let Ok(live) = self.live.lock() else {
+                anyhow::bail!("список завдань отруєно");
+            };
+            live.values()
+                .filter(|t| t.status == Status::Running)
+                .count()
+                < self.max_concurrent
+        };
+
         if let Ok(mut live) = self.live.lock()
             && let Some(task) = live.get_mut(&id)
         {
-            task.status = Status::Running;
+            task.status = if start_now {
+                Status::Running
+            } else {
+                Status::Queued
+            };
             task.error = None;
+            task.protocol = protocol.clone();
+            task.targets = targets.clone();
+            task.session = session.clone();
+            task.url = url.clone();
         }
 
-        self.set_status(id, Status::Running, None);
-        self.clone()
-            .spawn_download(id, protocol, url, targets, session);
+        if start_now {
+            self.set_status(id, Status::Running, None);
+            self.clone()
+                .spawn_download(id, protocol, url, targets, session);
+        } else {
+            self.set_status(id, Status::Queued, None);
+        }
         Ok(())
     }
 
@@ -578,6 +689,13 @@ impl Engine {
     }
 }
 
+fn id_наступного_в_черзі(live: &HashMap<i64, Live>) -> Option<i64> {
+    live.values()
+        .filter(|t| t.status == Status::Queued)
+        .map(|t| t.id)
+        .min()
+}
+
 /// Живе завдання з тим самим URL: running / queued / paused.
 fn знайти_живе(live: &Mutex<HashMap<i64, Live>>, url: &str) -> Option<i64> {
     let Ok(guard) = live.lock() else {
@@ -703,6 +821,8 @@ mod tests {
                     prev_done: 0,
                     speed: 0,
                     session: Session::default(),
+                    protocol: "http".into(),
+                    targets: vec![],
                 },
             ),
             (
@@ -719,11 +839,73 @@ mod tests {
                     prev_done: 0,
                     speed: 0,
                     session: Session::default(),
+                    protocol: "http".into(),
+                    targets: vec![],
                 },
             ),
         ]));
         assert_eq!(знайти_живе(&live, "https://b"), Some(2));
         assert_eq!(знайти_живе(&live, "https://a"), None);
+    }
+
+    #[test]
+    fn черга_бере_найменший_id() {
+        let mut live = HashMap::new();
+        live.insert(
+            5,
+            Live {
+                id: 5,
+                url: "https://c".into(),
+                name: "c".into(),
+                status: Status::Queued,
+                done: 0,
+                total: None,
+                segments: 0,
+                error: None,
+                prev_done: 0,
+                speed: 0,
+                session: Session::default(),
+                protocol: "http".into(),
+                targets: vec![],
+            },
+        );
+        live.insert(
+            3,
+            Live {
+                id: 3,
+                url: "https://d".into(),
+                name: "d".into(),
+                status: Status::Queued,
+                done: 0,
+                total: None,
+                segments: 0,
+                error: None,
+                prev_done: 0,
+                speed: 0,
+                session: Session::default(),
+                protocol: "http".into(),
+                targets: vec![],
+            },
+        );
+        live.insert(
+            4,
+            Live {
+                id: 4,
+                url: "https://e".into(),
+                name: "e".into(),
+                status: Status::Running,
+                done: 0,
+                total: None,
+                segments: 0,
+                error: None,
+                prev_done: 0,
+                speed: 0,
+                session: Session::default(),
+                protocol: "http".into(),
+                targets: vec![],
+            },
+        );
+        assert_eq!(id_наступного_в_черзі(&live), Some(3));
     }
 
     #[test]

@@ -40,9 +40,7 @@ pub struct HlsProtocol {
 impl HlsProtocol {
     /// Створити модуль із власним HTTP-клієнтом.
     pub fn new() -> Result<Self> {
-        let client = Client::builder()
-            .build()
-            .map_err(|e| Error::Store(format!("не вдалося створити HTTP-клієнт: {e}")))?;
+        let client = downloader_proto_http::зібрати_клієнт()?;
         Ok(Self {
             client,
             rate_limit: Mutex::new(0),

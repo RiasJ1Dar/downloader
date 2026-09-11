@@ -65,9 +65,7 @@ pub struct HttpProtocol {
 impl HttpProtocol {
     /// Створити модуль із власним HTTP-клієнтом.
     pub fn new(parts: usize) -> Result<Self> {
-        let client = Client::builder()
-            .build()
-            .map_err(|e| Error::Store(format!("не вдалося створити HTTP-клієнт: {e}")))?;
+        let client = crate::зібрати_клієнт()?;
 
         Ok(Self {
             client,

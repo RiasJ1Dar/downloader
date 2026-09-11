@@ -5,10 +5,12 @@
 //! планувальник не зміниться жодним рядком.
 
 pub mod adapter;
+pub mod client;
 pub mod download;
 pub mod headers;
 pub mod probe;
 
+pub use client::{USER_AGENT, зібрати_клієнт};
 pub use headers::{ContentRange, RangeSupport, Validator};
 pub use adapter::HttpProtocol;
 pub use download::{DownloadError, Options, Outcome, download};
