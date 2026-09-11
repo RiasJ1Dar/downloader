@@ -1,0 +1,34 @@
+[package]
+name = "downloader-proto-http"
+description = "Протокол HTTP: проба URL, Range, resume, розбір заголовків"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+downloader-core.workspace = true
+async-trait.workspace = true
+reqwest.workspace = true
+futures-util.workspace = true
+tokio = { workspace = true, features = ["rt", "time", "macros", "sync"] }
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+downloader-testserver.workspace = true
+downloader-core.workspace = true
+async-trait.workspace = true
+sha2.workspace = true
+hex.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+anyhow.workspace = true
+
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+let_underscore_must_use = "deny"

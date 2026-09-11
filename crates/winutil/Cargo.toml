@@ -1,0 +1,20 @@
+[package]
+name = "downloader-winutil"
+description = "Windows-специфіка: Mark-of-the-Web, довгі шляхи, безпечні імена файлів"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+tracing.workspace = true
+
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+let_underscore_must_use = "deny"

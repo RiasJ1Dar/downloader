@@ -1,0 +1,28 @@
+[package]
+name = "downloader-core"
+description = "Рушій завантажень: сегментація, resume, реєстр протоколів"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+serde.workspace = true
+async-trait.workspace = true
+serde_json.workspace = true
+rusqlite.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+# Проковтнута помилка стирає слід — заборонено на рівні збірки.
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+let_underscore_must_use = "deny"

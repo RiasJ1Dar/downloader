@@ -1,0 +1,17 @@
+/target
+**/*.rs.bk
+*.pdb
+
+# стан і бази під час розробки
+*.db
+*.db-shm
+*.db-wal
+/testdata
+
+# сторонні бінарники (ffmpeg кладеться в інсталятор, yt-dlp качається)
+/vendor
+/tools/*.exe
+
+*.md
+!README.md
+

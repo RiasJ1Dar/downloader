@@ -1,0 +1,36 @@
+[package]
+name = "downloader-proto-hls"
+description = "Протокол HLS: m3u8, AES-128, вибір якості, зшивання сегментів"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+downloader-core.workspace = true
+downloader-proto-http.workspace = true
+async-trait.workspace = true
+reqwest.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["rt", "time", "macros", "sync", "process"] }
+tracing.workspace = true
+m3u8-rs.workspace = true
+aes.workspace = true
+cbc.workspace = true
+bytes.workspace = true
+hex.workspace = true
+
+[dev-dependencies]
+downloader-testserver.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+anyhow.workspace = true
+sha2.workspace = true
+hex.workspace = true
+
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"

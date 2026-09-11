@@ -1,0 +1,37 @@
+[package]
+name = "downloader-core-service"
+description = "Ядро менеджера завантажень окремим процесом"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "downloader-core"
+path = "src/main.rs"
+
+[dependencies]
+downloader-core.workspace = true
+downloader-ipc.workspace = true
+downloader-proto-http.workspace = true
+downloader-proto-hls.workspace = true
+downloader-winutil.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+reqwest.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "signal"] }
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+downloader-testserver.workspace = true
+sha2.workspace = true
+hex.workspace = true
+
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"

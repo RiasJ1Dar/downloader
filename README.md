@@ -1,0 +1,60 @@
+# Downloader
+
+Менеджер завантажень для Windows. Аналог IDM / Ant Download Manager.
+
+## Де що
+
+| | |
+|---|---|
+| Код | ця тека, `<локальний шлях>` |
+
+`.md` у теку коду не кладемо — план і рішення живуть у сховищі нотаток.
+Цей файл — виняток і вказівник.
+
+## Структура
+
+```
+crates/core   ядро: рушій, планувальник, реєстр протоколів. Не знає про UI
+apps/cli      командний рядок: перша оболонка й тестовий стенд
+```
+
+Далі за планом: `proto-http`, `proto-hls`, `proto-dash`, `proto-external`,
+`ipc`, `winutil`, `apps/core-service`, `apps/nmhost`, `ext/`.
+
+## Збірка
+
+```
+cargo build --workspace
+cargo test --workspace
+cargo build --release -p downloader-cli -p downloader-core-service
+```
+
+Бінарники: `target/release/dl.exe` і `target/release/downloader-core.exe`.
+
+## Мінімальний запуск (Windows)
+
+HTTP без ядра (один процес):
+
+```
+dl get https://example.com/file.zip -o file.zip
+```
+
+З ядром у треї (завдання переживе закриття консолі). HLS тільки цим шляхом:
+
+```
+downloader-core
+dl add https://example.com/file.zip
+dl add https://cdn.example/master.m3u8 -o video.ts
+dl list
+dl watch
+```
+
+Паузи в ядрі ще немає. Вікна немає — CLI є тестовим стендом.
+
+## Правила, які тримають архітектуру
+
+1. **Ядро не згадує жодного протоколу на ім'я.** HTTP, HLS, торент — усе
+   через контракт `Protocol`. Перевіряється тестом із протоколом-пустушкою.
+2. **Проковтнута помилка заборонена.** `unwrap`, `expect`, `panic` і
+   `let _ =` у ядрі відхиляє збірка (`[lints.clippy]`).
+3. **Логіка не заповзає в UI.** Усе, що вміє вікно, спершу вміє CLI.
