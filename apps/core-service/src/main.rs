@@ -53,6 +53,7 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let cli = Cli::parse();
+    let ставити_nmhost = cli.pipe.is_none();
 
     let data_dir = cli
         .db
@@ -99,8 +100,26 @@ async fn main() -> anyhow::Result<()> {
 
     let engine = engine::Engine::new(&db, downloads.clone(), registry)?;
 
-    if std::env::var_os("DOWNLOADER_WATCH_CLIPBOARD").is_some() {
+    let clip = std::env::var("DOWNLOADER_WATCH_CLIPBOARD").unwrap_or_default();
+    if clip != "0" {
         tokio::spawn(clipboard_watch::run());
+    }
+
+    if ставити_nmhost && let Ok(mut host) = std::env::current_exe() {
+        host.set_file_name(if cfg!(windows) {
+            "downloader-nmhost.exe"
+        } else {
+            "downloader-nmhost"
+        });
+        if host.is_file() {
+            match std::process::Command::new(&host).arg("--install").status() {
+                Ok(st) if st.success() => {
+                    tracing::info!("native host прописано для браузера");
+                }
+                Ok(st) => tracing::warn!(code = ?st.code(), "native host --install не вдався"),
+                Err(e) => tracing::warn!(error = %e, "не запустити downloader-nmhost --install"),
+            }
+        }
     }
 
     tracing::info!(

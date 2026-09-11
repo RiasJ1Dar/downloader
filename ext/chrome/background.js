@@ -1,6 +1,43 @@
 // MV3: downloads.onCreated + cancel, далі native host. Не localhost-порт.
 const HOST = "com.downloader.host";
 
+function sendToHost(payload) {
+  chrome.runtime.sendNativeMessage(HOST, payload, (resp) => {
+    if (chrome.runtime.lastError) {
+      console.warn("Downloader host:", chrome.runtime.lastError.message);
+      return;
+    }
+    if (resp && resp.ok) {
+      console.info("Downloader завдання", resp.id);
+    } else {
+      console.warn("Downloader:", resp && resp.error);
+    }
+  });
+}
+
+function withCookies(url, referer, extraUrl) {
+  const payload = { url: extraUrl || url, referer: referer || url };
+  try {
+    const u = new URL(payload.url);
+    chrome.cookies.getAll({ url: u.origin }, (list) => {
+      if (list && list.length) {
+        payload.cookies = list.map((c) => c.name + "=" + c.value).join("; ");
+      }
+      sendToHost(payload);
+    });
+  } catch (_) {
+    sendToHost(payload);
+  }
+}
+
+chrome.runtime.onMessage.addListener((msg) => {
+  if (!msg || msg.op !== "add") return;
+  const target = msg.media || msg.page;
+  if (!target) return;
+  withCookies(msg.page || target, msg.page, target);
+});
+
+
 chrome.downloads.onCreated.addListener((item) => {
   const url = item.url || "";
   if (!url.startsWith("http://") && !url.startsWith("https://")) return;

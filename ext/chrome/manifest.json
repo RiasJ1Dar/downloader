@@ -4,9 +4,18 @@
   "version": "0.1.0",
   "description": "Перехоплює завантаження і віддає ядру Downloader через native messaging. Без локального HTTP-порту.",
   "minimum_chrome_version": "116",
-  "permissions": ["downloads", "nativeMessaging", "cookies"],
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAzyCsWZOlvUpOdoEpW8OYHxkURl4m4CDPMPpt/xIBpg87vZOL6PinVQP3Q7zMLP1tr2GqRU79L/WmyKnzf7F9tzZf39QksYR58a1yH4PExMzXsDc/zK+xLNDZN26j06UbW/yUJ2T2eOzodjEg5KzrMwTzOqeheGO3W5XK6WPE/IQL+kcL10PisY4XwN+jWKjQOC1gHDPv2UR87ipwCTjlQc+bf6ZQW3+htv6QcQ1HGuc6Zwrt9AB5VtAglCuN5kFgQlTw3qiLoLvzfua26hpFrs1A6QVaI9cWyAzRHQh6pN9eFbkLQNLN9VGcYfDaflhGqRqdP+n0pBlj5PEE14YR+wIDAQAB",
+  "permissions": ["downloads", "nativeMessaging", "cookies", "webRequest"],
   "host_permissions": ["http://*/*", "https://*/*"],
   "background": {
     "service_worker": "background.js"
-  }
+  },
+  "content_scripts": [
+    {
+      "matches": ["http://*/*", "https://*/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle",
+      "all_frames": true
+    }
+  ]
 }

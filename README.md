@@ -13,8 +13,10 @@
 Мови інтерфейсу: українська (типова) і англійська в першому релізі, далі
 інші популярні локалі. Російської в продукті немає.
 
-Розширення браузера (скелет MV3): `ext/chrome/`. Native host:
-`downloader-nmhost` — named pipe до ядра, не TCP-порт.
+Розширення: `ext/chrome/` (ID `dcfgihgimkkfkhmbdpogbicigioldhba`).
+Ядро при старті кличе `downloader-nmhost --install` (Chrome/Edge/Firefox).
+Кнопка «Завантажити» на `<video>` — Shadow DOM. Слухач буфера ввімкнено,
+вимкнути: `DOWNLOADER_WATCH_CLIPBOARD=0`.
 
 ## Структура
 

@@ -3,6 +3,8 @@
 //! Жодного TCP-порту. Кадр як у браузера: 4 байти LE + JSON. Далі той самий
 //! IPC, що й у CLI (`Hello` client=`nmhost`, потім `Add`).
 
+mod install;
+
 use anyhow::{Context, Result, bail};
 use downloader_ipc::frame::{read_frame, write_frame};
 use downloader_ipc::protocol::{PROTOCOL_VERSION, Request, Response};
@@ -11,7 +13,6 @@ use serde::{Deserialize, Serialize};
 use tokio::io::{self, AsyncReadExt, AsyncWriteExt, stdin, stdout};
 
 /// Ім'я native host у маніфесті розширення.
-#[allow(dead_code)]
 pub const HOST_NAME: &str = "com.downloader.host";
 
 #[derive(Debug, Deserialize)]
@@ -38,6 +39,13 @@ async fn main() -> Result<()> {
         .with_writer(std::io::stderr)
         .with_env_filter("warn")
         .init();
+
+    if std::env::args().any(|a| a == "--install") {
+        let exe = std::env::current_exe().context("current_exe")?;
+        let path = install::install(&exe)?;
+        eprintln!("native host поставлено: {}", path.display());
+        return Ok(());
+    }
 
     let mut stdin = stdin();
     let mut stdout = stdout();
