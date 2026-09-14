@@ -5173,6 +5173,7 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
         <path data-edge-from="http" data-edge-to="origin" data-edge-label="Range: bytes=" data-edge-key="9" data-edge-id="http-origin" data-composition-points="1030,323;1080,323;1080,220;1130,220" d="M 1030 323 L 1072 323 Q 1080 323 1080 315 L 1080 228 Q 1080 220 1088 220 L 1130 220" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
         <path data-edge-from="stream" data-edge-to="origin" data-edge-key="10" data-edge-id="stream-origin" data-composition-points="1030,103;1080,103;1080,206;1130,206" d="M 1030 103 L 1072 103 Q 1080 103 1080 111 L 1080 198 Q 1080 206 1088 206 L 1130 206" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
         <path data-edge-from="http" data-edge-to="files" data-edge-label="позиційний запис" data-edge-key="11" data-edge-id="http-files" data-composition-points="940,356;940,400" d="M 940 356 L 940 400" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="ffmpeg" data-edge-to="files" data-edge-label="відео + звук" data-edge-key="12" data-edge-id="ffmpeg-files" data-composition-points="1130,433;1030,433" d="M 1130 433 L 1030 433" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
 
         <!-- Components -->
         <g id="node-ext" data-node-id="ext" data-node-label="Розширення Chrome" tabindex="0" role="button" aria-label="Focus Розширення Chrome, MV3 · перехоплює завантаження, Architecture component" aria-pressed="false" data-node-kind="external" data-node-sublabel="MV3 · перехоплює завантаження" data-node-context="Architecture component">
@@ -5323,6 +5324,19 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
         <text data-detail="fine" x="940" y="458" class="t-database" font-size="7" text-anchor="middle">Mark-of-the-Web</text>
         </g>
 
+        <g id="node-ffmpeg" data-node-id="ffmpeg" data-node-label="ffmpeg" tabindex="0" role="button" aria-label="Focus ffmpeg, зводить доріжки в один файл, Architecture component" aria-pressed="false" data-node-kind="external" data-node-sublabel="зводить доріжки в один файл" data-node-tag="LGPL, в інсталяторі" data-node-context="Architecture component">
+          <title>ffmpeg · зводить доріжки в один файл · Architecture component · LGPL, в інсталяторі</title>
+          <rect x="1130" y="400" width="170" height="66" rx="6" class="c-mask"/>
+          <rect x="1130" y="400" width="170" height="66" rx="6" class="c-external" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="external" class="semantic-sigil s-external" transform="translate(1136 406) scale(0.6875)">
+            <rect x="2.5" y="5" width="8.5" height="8" rx="1.5"/>
+            <path d="M8 2.5h5.5V8M13.5 2.5 7.5 8.5"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="1215" y="431" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">ffmpeg</text>
+        <text data-detail="context" x="1215" y="447" class="t-muted" font-size="9" text-anchor="middle">зводить доріжки в один файл</text>
+        <text data-detail="fine" x="1215" y="458" class="t-external" font-size="7" text-anchor="middle">LGPL, в інсталяторі</text>
+        </g>
+
         <!-- Connection labels -->
         <g data-detail="context" data-edge-from="ui" data-edge-to="ipc" data-edge-label="кадр: 4 байти + JSON" data-edge-key="0" data-edge-id="ui-ipc">
           <rect x="227" y="140.5" width="106" height="14" rx="3" class="c-mask"/>
@@ -5356,6 +5370,10 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
         <g data-detail="context" data-edge-from="http" data-edge-to="files" data-edge-label="позиційний запис" data-edge-key="11" data-edge-id="http-files">
           <rect x="896.6" y="360" width="86.8" height="14" rx="3" class="c-mask"/>
           <text x="940" y="370" class="t-muted" font-size="8" text-anchor="middle">позиційний запис</text>
+        </g>
+        <g data-detail="context" data-edge-from="ffmpeg" data-edge-to="files" data-edge-label="відео + звук" data-edge-key="12" data-edge-id="ffmpeg-files">
+          <rect x="1046.2" y="413" width="67.6" height="14" rx="3" class="c-mask"/>
+          <text x="1080" y="423" class="t-messagebus" font-size="8" text-anchor="middle">відео + звук</text>
         </g>
 
         <!-- Boundary labels (foreground masks keep routes out of titles) -->
@@ -5608,6 +5626,7 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
         </div>
         <ul>
           <li>&bull; Ядро питає реєстр «хто візьме це посилання», а не кличе HTTP напряму</li>
+          <li>&bull; Якість обирає людина: HLS і DASH дають перелік із маніфесту, YouTube — із форматів</li>
           <li>&bull; Торент доточується новим модулем — контракт уже це передбачає</li>
         </ul>
       </div>
