@@ -33,8 +33,17 @@
       стару. Зворотний порядок лишив би людину без програми, якби установка
       нової впала посеред дороги.
     -->
+    <!--
+      ⚠️ AllowSameVersionUpgrades обов'язковий, і ось чому. WiX генерує новий
+      ProductCode на кожну збірку, а версія при перескладанні тієї самої
+      версії лишається та сама. Без цього прапорця друга установка **не
+      замінює** першу: обидві реєструються, файли діляться між ними, і після
+      видалення однієї на диску лишається все — у нас так лишилось 290 МБ
+      при «успішному» видаленні.
+    -->
     <MajorUpgrade
         Schedule="afterInstallExecute"
+        AllowSameVersionUpgrades="yes"
         DowngradeErrorMessage="Уже встановлено новішу версію Downloader." />
 
     <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
@@ -45,6 +54,9 @@
       <ComponentGroupRef Id="Core" />
       <ComponentGroupRef Id="Ui" />
       <ComponentGroupRef Id="Shortcuts" />
+<?ifdef FfmpegDir ?>
+      <ComponentGroupRef Id="Ffmpeg" />
+<?endif?>
     </Feature>
 
     <StandardDirectory Id="LocalAppDataFolder">
@@ -101,6 +113,22 @@
     <ComponentGroup Id="Ui" Directory="INSTALLFOLDER">
       <Files Include="$(var.UiDir)\**" />
     </ComponentGroup>
+
+<?ifdef FfmpegDir ?>
+    <!--
+      ffmpeg поруч із програмою.
+
+      ⚠️ Для YouTube це не додаток, а умова роботи: відео роздається
+      роздільно — доріжка відео окремо, доріжка звуку окремо, і навіть 144p
+      не існує одним файлом. Без ffmpeg качання закінчується двома уламками.
+
+      Збірка **LGPL**, зібрана без ключа enable-gpl: GPL-варіант зобов'язав
+      би нас відкрити власний код. Поруч лежить текст ліцензії.
+    -->
+    <ComponentGroup Id="Ffmpeg" Directory="INSTALLFOLDER">
+      <Files Include="$(var.FfmpegDir)\**" />
+    </ComponentGroup>
+<?endif?>
 
     <ComponentGroup Id="Shortcuts" Directory="INSTALLFOLDER">
       <Component Id="StartMenuShortcut" Guid="*">

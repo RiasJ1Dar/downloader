@@ -10,7 +10,7 @@
 mod client;
 mod expand;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
@@ -125,6 +125,11 @@ enum Command {
 
     /// Показати завдання ядра.
     List,
+
+    /// Поставити ffmpeg поруч із програмою.
+    ///
+    /// Потрібен, щоб зводити відео зі звуком: YouTube роздає їх окремо.
+    FfmpegInstall,
 
     /// Які варіанти якості пропонує це посилання.
     ///
@@ -314,6 +319,11 @@ async fn main() -> Result<()> {
                 Response::Error { message, .. } => anyhow::bail!(message),
                 other => anyhow::bail!("несподівана відповідь ядра: {other:?}"),
             }
+        }
+
+        Command::FfmpegInstall => {
+            let куди = поставити_ffmpeg(&client).await?;
+            println!("{}", t_pairs("ffmpeg-installed", &[("path", куди.display().to_string())]));
         }
 
         Command::Variants {
@@ -918,6 +928,132 @@ fn шляхи_для_обраних(out: Option<PathBuf>, files: &[PlannedFile])
 }
 
 /// Розмір у зрозумілому вигляді.
+/// Звідки беремо ffmpeg.
+///
+/// ⚠️ Саме **LGPL**-збірка, без `enable-gpl`. GPL-варіант зобов'язав би нас
+/// відкрити власний код — а тут ми поширюємо ffmpeg разом із програмою.
+const FFMPEG_URL: &str = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n9.0-latest-win64-lgpl-shared-9.0.zip";
+
+/// Завантажити й поставити ffmpeg поруч із програмою.
+///
+/// Качаємо **власним рушієм**: сегментовано, з докачуванням. Менеджеру
+/// завантажень личить користуватися собою, та й перевірка виходить
+/// безкоштовна — якщо тут щось не працює, то не працює й головна функція.
+async fn поставити_ffmpeg(client: &reqwest::Client) -> Result<PathBuf> {
+    let поруч = std::env::current_exe()?
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("не визначити теку програми"))?
+        .to_path_buf();
+
+    let тимчасова = std::env::temp_dir().join("downloader-ffmpeg");
+    std::fs::create_dir_all(&тимчасова)?;
+    let архів = тимчасова.join("ffmpeg.zip");
+
+    println!("{}", t("ffmpeg-downloading"));
+
+    let info = probe(client, FFMPEG_URL).await?;
+    let opts = Options {
+        parts: 8,
+        ..Options::default()
+    };
+    download_with_probe(client, &info, &архів, &opts).await?;
+
+    println!("{}", t("ffmpeg-unpacking"));
+    розпакувати(&архів, &тимчасова)?;
+
+    // Усередині архіву тека з версією, а в ній `bin`.
+    let bin = знайти_bin(&тимчасова)
+        .ok_or_else(|| anyhow::anyhow!("в архіві немає теки bin: {}", тимчасова.display()))?;
+
+    for запис in std::fs::read_dir(&bin)? {
+        let запис = запис?;
+        let імʼя = запис.file_name();
+        let імʼя = імʼя.to_string_lossy();
+
+        // ffplay — програвач; нам потрібне лише зведення доріжок.
+        if імʼя.eq_ignore_ascii_case("ffplay.exe") {
+            continue;
+        }
+
+        std::fs::copy(запис.path(), поруч.join(запис.file_name()))?;
+    }
+
+    // Ліцензію кладемо поруч обов'язково: LGPL цього вимагає.
+    if let Some(ліцензія) = знайти_ліцензію(&тимчасова) {
+        std::fs::copy(ліцензія, поруч.join("LICENSE-ffmpeg.txt"))?;
+    }
+
+    let _ = std::fs::remove_dir_all(&тимчасова);
+
+    let exe = поруч.join(if cfg!(windows) { "ffmpeg.exe" } else { "ffmpeg" });
+    if !exe.is_file() {
+        anyhow::bail!("після розпакування ffmpeg не з'явився: {}", exe.display());
+    }
+
+    Ok(exe)
+}
+
+/// Розпакувати zip системним архіватором.
+///
+/// Windows 10+ несе bsdtar у System32, і він розуміє zip. Своя реалізація
+/// zip заради одного розпакування на все життя програми — зайва вага й
+/// зайвий код, який доведеться супроводжувати.
+fn розпакувати(архів: &Path, куди: &Path) -> Result<()> {
+    let tar = if cfg!(windows) {
+        std::env::var_os("SystemRoot")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("C:\\Windows"))
+            .join("System32")
+            .join("tar.exe")
+    } else {
+        PathBuf::from("tar")
+    };
+
+    let out = std::process::Command::new(&tar)
+        .current_dir(куди)
+        .arg("-xf")
+        .arg(архів)
+        .output()
+        .map_err(|e| anyhow::anyhow!("не запустити {}: {e}", tar.display()))?;
+
+    if !out.status.success() {
+        anyhow::bail!(
+            "розпакування не вдалося: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+
+    Ok(())
+}
+
+fn знайти_bin(корінь: &Path) -> Option<PathBuf> {
+    for запис in std::fs::read_dir(корінь).ok()? {
+        let шлях = запис.ok()?.path();
+        if !шлях.is_dir() {
+            continue;
+        }
+        let bin = шлях.join("bin");
+        if bin.is_dir() {
+            return Some(bin);
+        }
+    }
+    None
+}
+
+fn знайти_ліцензію(корінь: &Path) -> Option<PathBuf> {
+    for запис in std::fs::read_dir(корінь).ok()? {
+        let шлях = запис.ok()?.path();
+        if !шлях.is_dir() {
+            continue;
+        }
+        let l = шлях.join("LICENSE.txt");
+        if l.is_file() {
+            return Some(l);
+        }
+    }
+    None
+}
+
 /// Варіанти якості для посилання — тим самим модулем, який його й качатиме.
 ///
 /// Ядро тут не потрібне: проба нічого не змінює, і людина має бачити перелік
