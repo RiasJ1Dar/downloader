@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Downloader: ядро окремо від оболонок",
+    "quality_profile": "showcase",
+    "output": "architecture.html",
+    "viewBox": [1280, 720]
+  },
+  "components": [
+    { "id": "ext", "type": "frontend", "label": "ext/chrome", "sublabel": "MV3 native msg", "pos": [60, 120], "size": [150, 60] },
+    { "id": "cli", "type": "frontend", "label": "dl.exe", "sublabel": "CLI", "pos": [60, 280], "size": [150, 60] },
+    { "id": "ui", "type": "frontend", "label": "apps/ui", "sublabel": "Avalonia", "pos": [60, 440], "size": [150, 60] },
+    { "id": "nmhost", "type": "backend", "label": "nmhost", "sublabel": "stdio host", "pos": [280, 120], "size": [140, 60] },
+    { "id": "core", "type": "backend", "label": "downloader-core", "sublabel": "named pipe", "pos": [500, 280], "size": [180, 72] },
+    { "id": "reg", "type": "backend", "label": "Registry", "sublabel": "http hls dash ytdlp", "pos": [780, 160], "size": [180, 64] },
+    { "id": "db", "type": "database", "label": "SQLite", "sublabel": "task/file/segment", "pos": [780, 320], "size": [160, 60] },
+    { "id": "disk", "type": "external", "label": "Диск", "sublabel": "файли + MotW", "pos": [780, 480], "size": [160, 60] },
+    { "id": "net", "type": "cloud", "label": "CDN / сайти", "sublabel": "HTTP HLS DASH YT", "pos": [1060, 280], "size": [160, 64] }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "оболонки", "wraps": ["ext", "cli", "ui", "nmhost"] }
+  ],
+  "connections": [
+    { "id": "ext-nm", "from": "ext", "to": "nmhost", "label": "native messaging", "labelDy": -24 },
+    { "id": "nm-core", "from": "nmhost", "to": "core", "label": "IPC Add" },
+    { "id": "cli-core", "from": "cli", "to": "core", "label": "IPC 4B+JSON", "variant": "emphasis" },
+    { "id": "ui-core", "from": "ui", "to": "core", "label": "той самий pipe" },
+    { "id": "core-reg", "from": "core", "to": "reg", "label": "Protocol", "fromSide": "top", "toSide": "left" },
+    { "id": "core-db", "from": "core", "to": "db", "label": "стан" },
+    { "id": "core-disk", "from": "core", "to": "disk", "label": "запис файлу", "fromSide": "bottom", "toSide": "left" },
+    { "id": "reg-net", "from": "reg", "to": "net", "label": "GET Range / HLS" }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "Ядро", "items": ["Не знає імен HTTP/HLS", "Вікно — ще один клієнт pipe"] },
+    { "dot": "emerald", "title": "Протоколи", "items": ["HLS і DASH перед HTTP", "yt-dlp окремим модулем"] },
+    { "dot": "rose", "title": "Браузер", "items": ["Без localhost-порта", "nmhost + Shadow DOM"] }
+  ]
+}

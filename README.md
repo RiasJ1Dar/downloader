@@ -2,6 +2,10 @@
 
 Менеджер завантажень для Windows. Аналог IDM / Ant Download Manager.
 
+![Архітектура](docs/architecture.png)
+
+Інтерактивна схема: [docs/architecture.html](docs/architecture.html). Кнопки переглядача — англійською.
+
 ## Де що
 
 | | |
