@@ -47,7 +47,8 @@ public sealed record AddRequest(
     string? Dest = null,
     int? Parts = null,
     string? Cookies = null,
-    string? Referer = null) : Request
+    string? Referer = null,
+    string? Variant = null) : Request
 {
     public override string Kind => "add";
 }
@@ -83,6 +84,20 @@ public sealed record RemoveRequest(long Id, bool WithFile) : Request
 public sealed record DetailsRequest(long Id) : Request
 {
     public override string Kind => "details";
+}
+
+/// <summary>
+/// Які варіанти якості має це посилання.
+/// </summary>
+/// <remarks>
+/// Окремий запит, а не частина <see cref="AddRequest"/>: проба коштує
+/// мережевого звернення, а для YouTube — ще й запуску yt-dlp. Робити її на
+/// кожне додавання, коли вибір нікому не потрібен, означало б платити цю
+/// затримку завжди.
+/// </remarks>
+public sealed record VariantsRequest(string Url) : Request
+{
+    public override string Kind => "variants";
 }
 
 public sealed record SubscribeRequest : Request
@@ -139,6 +154,9 @@ public sealed class Response
 
     [JsonPropertyName("parts")]
     public List<PartView>? Parts { get; set; }
+
+    [JsonPropertyName("variants")]
+    public List<VariantView>? Variants { get; set; }
 
     [JsonPropertyName("code")]
     public string? Code { get; set; }
@@ -268,4 +286,27 @@ public sealed class PartView
     public ulong Done { get; set; }
 
     public ulong Length => End > Start ? End - Start : 0;
+}
+
+/// <summary>Варіант якості: «720p», «лише звук».</summary>
+/// <remarks>
+/// <c>Id</c> непрозорий — його видав модуль, йому ж він і повернеться.
+/// Вікно не намагається його тлумачити, як не намагається й ядро.
+/// </remarks>
+public sealed class VariantView
+{
+    [JsonPropertyName("id")]
+    public string Id { get; set; } = "";
+
+    [JsonPropertyName("label")]
+    public string Label { get; set; } = "";
+
+    [JsonPropertyName("height")]
+    public uint? Height { get; set; }
+
+    [JsonPropertyName("size")]
+    public ulong? Size { get; set; }
+
+    [JsonPropertyName("note")]
+    public string? Note { get; set; }
 }

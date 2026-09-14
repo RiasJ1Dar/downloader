@@ -280,6 +280,65 @@ async fn клієнт_бачить_завдання_у_списку() -> anyhow:
 }
 
 #[tokio::test]
+async fn звичайний_файл_не_має_чого_вибирати() -> anyhow::Result<()> {
+    // ⚠️ Порожній перелік — це **відповідь**, а не помилка: звичайний файл
+    // має один вигляд, і вибирати в ньому нема чого. Якби ядро відповідало
+    // помилкою, вікно показувало б червоне там, де все гаразд.
+    let server = EvilServer::start().await?;
+    let ядро = Ядро::запустити("variants")?;
+    let mut client = ядро.дочекатись().await?;
+    привітатись(&mut client).await?;
+
+    write_frame(
+        &mut client,
+        &Request::Variants {
+            url: server.url("/plain/64k"),
+        },
+    )
+    .await?;
+
+    match read_frame::<_, Response>(&mut client).await? {
+        Response::Variants { variants } => {
+            assert!(
+                variants.is_empty(),
+                "у звичайного файла не буває варіантів якості: {variants:?}"
+            );
+        }
+        other => anyhow::bail!("несподівана відповідь: {other:?}"),
+    }
+
+    server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn варіанти_невідомого_посилання_дають_зрозумілу_відмову() -> anyhow::Result<()> {
+    let ядро = Ядро::запустити("variants-unknown")?;
+    let mut client = ядро.дочекатись().await?;
+    привітатись(&mut client).await?;
+
+    write_frame(
+        &mut client,
+        &Request::Variants {
+            url: "невідомо://щось".to_owned(),
+        },
+    )
+    .await?;
+
+    match read_frame::<_, Response>(&mut client).await? {
+        Response::Error { message, .. } => {
+            assert!(
+                message.contains("невідомо://щось"),
+                "помилка має називати посилання, а не лише факт відмови: {message}"
+            );
+        }
+        other => anyhow::bail!("на невідоме посилання чекали відмову, а не {other:?}"),
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn без_рукостискання_ядро_не_розмовляє() -> anyhow::Result<()> {
     let ядро = Ядро::запустити("handshake")?;
     let mut client = ядро.дочекатись().await?;

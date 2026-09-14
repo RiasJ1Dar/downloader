@@ -58,6 +58,21 @@ public sealed partial class MainViewModel : ObservableObject
     [ObservableProperty]
     private bool _connected;
 
+    /// <summary>Варіанти якості для посилання, яке зараз у полі.</summary>
+    public ObservableCollection<VariantRow> Variants { get; } = new();
+
+    /// <summary>Обраний варіант. <c>null</c> — вибір ще не зроблено.</summary>
+    [ObservableProperty]
+    private VariantRow? _selectedVariant;
+
+    /// <summary>Чи показувати панель вибору якості.</summary>
+    [ObservableProperty]
+    private bool _qualityOpen;
+
+    /// <summary>Чи триває проба посилання.</summary>
+    [ObservableProperty]
+    private bool _probing;
+
     /// <summary>
     /// Виділений рядок — єдиний, для якого питається розкладка сегментів.
     /// </summary>
@@ -502,7 +517,9 @@ public sealed partial class MainViewModel : ObservableObject
             return;
         }
 
-        Response resp = await _commands.CallAsync(new AddRequest(url), _cts.Token);
+        Response resp = await _commands.CallAsync(
+            new AddRequest(url, Variant: SelectedVariant?.Id),
+            _cts.Token);
 
         if (resp.IsError)
         {
@@ -511,7 +528,77 @@ public sealed partial class MainViewModel : ObservableObject
         }
 
         NewUrl = "";
+        ЗакритиВибір();
         Status = Каталог.T("ui-task-accepted", ("id", resp.Id ?? 0));
+    }
+
+    /// <summary>
+    /// Показати, які якості пропонує посилання.
+    /// </summary>
+    /// <remarks>
+    /// Окрема дія, а не частина «Завантажити»: проба коштує мережевого
+    /// звернення, а для YouTube — ще й запуску yt-dlp на кілька секунд.
+    /// Платити цю затримку кожному, хто просто качає файл, не варто.
+    /// </remarks>
+    [RelayCommand]
+    private async Task ShowQualityAsync()
+    {
+        string url = NewUrl.Trim();
+        if (url.Length == 0 || _commands is null || Probing)
+        {
+            return;
+        }
+
+        Probing = true;
+        Status = Каталог.T("ui-probing");
+
+        try
+        {
+            Response resp = await _commands.CallAsync(new VariantsRequest(url), _cts.Token);
+
+            if (resp.IsError)
+            {
+                Status = resp.Message ?? Каталог.T("ui-core-refused");
+                return;
+            }
+
+            Variants.Clear();
+            foreach (VariantView v in resp.Variants ?? new List<VariantView>())
+            {
+                Variants.Add(new VariantRow(v));
+            }
+
+            if (Variants.Count == 0)
+            {
+                // Не помилка: звичайний файл має один вигляд.
+                Status = Каталог.T("no-variants");
+                QualityOpen = false;
+                return;
+            }
+
+            SelectedVariant = Variants[0];
+            QualityOpen = true;
+            Status = "";
+        }
+        catch (Exception e)
+        {
+            Status = Каталог.T("ui-link-lost", ("message", e.Message));
+        }
+        finally
+        {
+            Probing = false;
+        }
+    }
+
+    /// <summary>Закрити вибір, не обираючи нічого.</summary>
+    [RelayCommand]
+    private void CancelQuality() => ЗакритиВибір();
+
+    private void ЗакритиВибір()
+    {
+        QualityOpen = false;
+        SelectedVariant = null;
+        Variants.Clear();
     }
 
     /// <summary>Вставити http(s) з буфера й одразу додати, якщо є посилання.</summary>
@@ -638,6 +725,31 @@ public sealed partial class MainViewModel : ObservableObject
     public void Shutdown() => _cts.Cancel();
 }
 
+/// <summary>Один варіант якості у переліку.</summary>
+public sealed class VariantRow
+{
+    public VariantRow(VariantView v)
+    {
+        Id = v.Id;
+        Label = v.Label;
+
+        string розмір = v.Size is { } b ? TaskRow.ЛюдськийРозмір(b) : "";
+        string нота = v.Note ?? "";
+
+        // «720p · 12,4 МБ · avc1» — рівно те, чого вистачає для вибору.
+        Details = string.Join(
+            " · ",
+            new[] { розмір, нота }.Where(x => x.Length > 0));
+    }
+
+    public string Id { get; }
+
+    public string Label { get; }
+
+    /// <summary>Розмір і кодек одним рядком.</summary>
+    public string Details { get; }
+}
+
 /// <summary>Рядок списку — те саме завдання, але з повідомленнями про зміни.</summary>
 public sealed partial class TaskRow : ObservableObject
 {
@@ -748,11 +860,11 @@ public sealed partial class TaskRow : ObservableObject
         ДописатиШвидкість(view.Speed);
 
         SizeText = view.Total is { } total
-            ? $"{Розмір(view.Done)} / {Розмір(total)}"
-            : Розмір(view.Done);
+            ? $"{ЛюдськийРозмір(view.Done)} / {ЛюдськийРозмір(total)}"
+            : ЛюдськийРозмір(view.Done);
 
         SpeedText = view.Speed > 0
-            ? Розмір(view.Speed) + Каталог.T("ui-per-sec")
+            ? ЛюдськийРозмір(view.Speed) + Каталог.T("ui-per-sec")
             : "";
 
         EtaText = view.EtaSecs is { } eta && eta > 0 ? Час(eta) : "";
@@ -779,7 +891,7 @@ public sealed partial class TaskRow : ObservableObject
         }
 
         PeakText = пік > 0
-            ? Каталог.T("ui-peak", ("speed", Розмір((ulong)пік) + Каталог.T("ui-per-sec")))
+            ? Каталог.T("ui-peak", ("speed", ЛюдськийРозмір((ulong)пік) + Каталог.T("ui-per-sec")))
             : "";
     }
 
@@ -811,7 +923,7 @@ public sealed partial class TaskRow : ObservableObject
         var інше => інше,
     };
 
-    private static string Розмір(ulong bytes)
+    internal static string ЛюдськийРозмір(ulong bytes)
     {
         string[] одиниці =
         [

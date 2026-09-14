@@ -121,3 +121,7 @@ ui-seg-many = сегментів
 ui-core-closed-handshake = ядро закрило з'єднання під час рукостискання
 ui-core-closed-reply = ядро закрило з'єднання, не відповівши
 no-variants = вибирати нема з чого: це посилання має один вигляд
+ui-quality = Якість…
+ui-probing = питаю джерело про доступні якості…
+ui-choose-quality = Оберіть якість
+ui-cancel = Скасувати

@@ -43,7 +43,7 @@
         </Style>
     </Window.Styles>
 
-    <Grid RowDefinitions="Auto,*,Auto,Auto" Margin="14">
+    <Grid RowDefinitions="Auto,Auto,*,Auto,Auto" Margin="14">
 
         <!-- ── Додавання ─────────────────────────────────────────────── -->
         <Grid Grid.Row="0" ColumnDefinitions="*,Auto" Margin="0,0,0,12">
@@ -61,6 +61,11 @@
                         Content="{i18n:T ui-clipboard}"
                         Command="{Binding PasteAddCommand}"
                         IsEnabled="{Binding Connected}"/>
+                <Button Padding="14,0"
+                        Content="{i18n:T ui-quality}"
+                        ToolTip.Tip="{i18n:T ui-choose-quality}"
+                        Command="{Binding ShowQualityCommand}"
+                        IsEnabled="{Binding Connected}"/>
                 <Button Padding="18,0"
                         Content="{i18n:T ui-download}"
                         Command="{Binding AddCommand}"
@@ -74,7 +79,56 @@
             переведено в maintenance mode, а тут потрібні лише рядок,
             смужка сегментів і кнопки.
         -->
+        <!--
+            ── Вибір якості ────────────────────────────────────────────
+            З'являється лише на вимогу: проба коштує мережевого звернення,
+            а для YouTube — ще й запуску yt-dlp на кілька секунд.
+        -->
         <Border Grid.Row="1"
+                Margin="0,0,0,12"
+                Padding="14,12"
+                CornerRadius="6"
+                BorderThickness="1"
+                BorderBrush="{DynamicResource SystemControlForegroundBaseLowBrush}"
+                Background="{DynamicResource SystemControlBackgroundListLowBrush}"
+                IsVisible="{Binding QualityOpen}">
+
+            <StackPanel Spacing="8">
+                <TextBlock Text="{i18n:T ui-choose-quality}" FontWeight="SemiBold"/>
+
+                <ListBox ItemsSource="{Binding Variants}"
+                         SelectedItem="{Binding SelectedVariant}"
+                         MaxHeight="190"
+                         Background="Transparent">
+                    <ListBox.ItemTemplate>
+                        <DataTemplate x:DataType="vm:VariantRow">
+                            <Grid ColumnDefinitions="Auto,*">
+                                <TextBlock Grid.Column="0"
+                                           Text="{Binding Label}"
+                                           FontWeight="SemiBold"
+                                           MinWidth="90"/>
+                                <TextBlock Grid.Column="1"
+                                           Classes="dim"
+                                           Text="{Binding Details}"
+                                           VerticalAlignment="Center"/>
+                            </Grid>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+
+                <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right">
+                    <Button Padding="14,4"
+                            Content="{i18n:T ui-cancel}"
+                            Command="{Binding CancelQualityCommand}"/>
+                    <Button Padding="18,4"
+                            Content="{i18n:T ui-download}"
+                            Command="{Binding AddCommand}"
+                            IsEnabled="{Binding Connected}"/>
+                </StackPanel>
+            </StackPanel>
+        </Border>
+
+        <Border Grid.Row="2"
                 BorderBrush="{DynamicResource SystemControlForegroundBaseLowBrush}"
                 BorderThickness="1"
                 CornerRadius="6"
@@ -169,7 +223,7 @@
             «2,4 МБ/с» не відрізняє рівне качання від пилки, що падає до
             нуля щопівсекунди, — а це різні причини.
         -->
-        <Border Grid.Row="2"
+        <Border Grid.Row="3"
                 Margin="0,12,0,0"
                 Padding="14,12"
                 CornerRadius="6"
@@ -234,7 +288,7 @@
         <!-- Рядок стану: кружечок зв'язку плюс останнє повідомлення. Без
              кружечка «з'єднано з ядром» губиться серед інших текстів, а це
              найважливіше, що тут є: без ядра не працює нічого. -->
-        <Grid Grid.Row="3" ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto" Margin="2,10,0,0">
+        <Grid Grid.Row="4" ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto" Margin="2,10,0,0">
             <StackPanel Orientation="Horizontal" Spacing="7">
                 <Ellipse Width="8" Height="8"
                          VerticalAlignment="Center"
