@@ -1,0 +1,150 @@
+<?xml version="1.0" encoding="utf-8"?>
+
+<!--
+  Інсталятор Downloader.
+
+  ⚠️ Ставимо **для користувача**, а не для всієї машини. Причини:
+
+  - менеджер завантажень не потребує адмінських прав ні для чого: він пише
+    в теку завантажень користувача й тримає власну базу в його профілі;
+  - установка без UAC — це різниця між «двічі клацнув і працює» і «спитало
+    пароль адміністратора, і людина передумала». Продукт роздають людям,
+    і кожне зайве вікно коштує частини з них;
+  - служби немає, автозапуск теж користувацький.
+
+  Через це INSTALLFOLDER лежить у LocalAppData\Programs — там, де тримають
+  свої per-user установки Visual Studio Code й інші.
+-->
+
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+
+  <Package
+      Name="Downloader"
+      Manufacturer="Downloader"
+      Version="$(var.Version)"
+      UpgradeCode="240E8147-55BB-4E96-B3B6-05F6D96C06BF"
+      Scope="perUser"
+      Compressed="yes"
+      Codepage="65001"
+      Language="1033">
+
+    <!--
+      Оновлення поверх старої версії: спершу ставимо нову, потім прибираємо
+      стару. Зворотний порядок лишив би людину без програми, якби установка
+      нової впала посеред дороги.
+    -->
+    <MajorUpgrade
+        Schedule="afterInstallExecute"
+        DowngradeErrorMessage="Уже встановлено новішу версію Downloader." />
+
+    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+
+    <!-- Головна можливість: усе одним шматком. Вибіркової установки немає
+         навмисно — ділити менеджер завантажень на частини нема на що. -->
+    <Feature Id="Main" Title="Downloader" Level="1">
+      <ComponentGroupRef Id="Core" />
+      <ComponentGroupRef Id="Ui" />
+      <ComponentGroupRef Id="Shortcuts" />
+    </Feature>
+
+    <StandardDirectory Id="LocalAppDataFolder">
+      <Directory Id="ProgramsFolder" Name="Programs">
+        <Directory Id="INSTALLFOLDER" Name="Downloader" />
+      </Directory>
+    </StandardDirectory>
+
+    <StandardDirectory Id="ProgramMenuFolder" />
+    <StandardDirectory Id="StartupFolder" />
+  </Package>
+
+  <Fragment>
+    <!--
+      Ядро, CLI і native host — три окремі бінарники, які працюють разом:
+      вікно й браузер говорять із ядром через локальний канал, а `dl` робить
+      те саме з консолі.
+    -->
+    <ComponentGroup Id="Core" Directory="INSTALLFOLDER">
+      <Component Id="CoreExe">
+        <File Source="$(var.ReleaseDir)\downloader-core.exe" KeyPath="yes" />
+      </Component>
+
+      <Component Id="CliExe">
+        <File Id="dl.exe" Source="$(var.ReleaseDir)\dl.exe" KeyPath="yes" />
+
+        <!--
+          `dl` у PATH користувача: сенс CLI в тому, щоб його можна було
+          набрати, не згадуючи, куди його поклали.
+        -->
+        <Environment
+            Id="PathDl"
+            Name="PATH"
+            Value="[INSTALLFOLDER]"
+            Part="last"
+            Action="set"
+            System="no" />
+      </Component>
+
+      <Component Id="NativeHostExe">
+        <File Source="$(var.ReleaseDir)\downloader-nmhost.exe" KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+
+    <!--
+      Вікно з усім рантаймом .NET усередині: на чужій машині нічого
+      доставляти не треба.
+
+      ⚠️ Символів налагодження в цій теці бути не повинно: сам
+      `libSkiaSharp.pdb` важить 81 МБ, і разом вони дають більше, ніж уся
+      решта пакета. Прибирає їх не інсталятор, а `dotnet publish` —
+      див. packaging/zibraty.ps1.
+    -->
+    <ComponentGroup Id="Ui" Directory="INSTALLFOLDER">
+      <Files Include="$(var.UiDir)\**" />
+    </ComponentGroup>
+
+    <ComponentGroup Id="Shortcuts" Directory="INSTALLFOLDER">
+      <Component Id="StartMenuShortcut" Guid="*">
+        <Shortcut
+            Id="StartMenuUi"
+            Directory="ProgramMenuFolder"
+            Name="Downloader"
+            Description="Менеджер завантажень"
+            Target="[INSTALLFOLDER]Downloader.Ui.exe"
+            WorkingDirectory="INSTALLFOLDER" />
+
+        <RemoveFolder Id="RemoveStartMenu" Directory="ProgramMenuFolder" On="uninstall" />
+
+        <RegistryValue
+            Root="HKCU"
+            Key="Software\Downloader"
+            Name="StartMenuShortcut"
+            Type="integer"
+            Value="1"
+            KeyPath="yes" />
+      </Component>
+
+      <!--
+        Ядро стартує разом із входом у систему. Без цього завдання в черзі
+        не поновляться самі, і людина дізнається про це вранці, коли нічого
+        не завантажилось.
+      -->
+      <Component Id="StartupShortcut" Guid="*">
+        <Shortcut
+            Id="StartupCore"
+            Directory="StartupFolder"
+            Name="Downloader (ядро)"
+            Description="Тримає чергу завантажень і живе у треї"
+            Target="[INSTALLFOLDER]downloader-core.exe"
+            WorkingDirectory="INSTALLFOLDER" />
+
+        <RegistryValue
+            Root="HKCU"
+            Key="Software\Downloader"
+            Name="Startup"
+            Type="integer"
+            Value="1"
+            KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+  </Fragment>
+</Wix>
