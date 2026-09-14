@@ -166,6 +166,22 @@ async fn dispatch(req: Request, engine: &Arc<Engine>) -> Response {
             },
         },
 
+        Request::Settings => {
+            let (max_concurrent, rate_limit) = engine.settings();
+            Response::Settings {
+                max_concurrent,
+                rate_limit,
+            }
+        }
+
+        Request::Configure {
+            max_concurrent,
+            rate_limit,
+        } => {
+            engine.configure(max_concurrent, rate_limit);
+            Response::Ok
+        }
+
         Request::Hello { .. } => Response::Error {
             code: ErrorCode::InvalidState,
             message: "рукостискання вже відбулось".to_owned(),

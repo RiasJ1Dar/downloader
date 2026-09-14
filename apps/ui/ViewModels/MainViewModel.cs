@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.Diagnostics;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -58,6 +59,12 @@ public sealed partial class MainViewModel : ObservableObject
     [ObservableProperty]
     private TaskRow? _selected;
 
+    [ObservableProperty]
+    private string _maxConcurrentText = "3";
+
+    [ObservableProperty]
+    private string _rateLimitText = "0";
+
     public ObservableCollection<TaskRow> Tasks { get; } = new();
 
     public MainViewModel()
@@ -90,6 +97,7 @@ public sealed partial class MainViewModel : ObservableObject
                     Status = "з'єднано з ядром";
                 });
 
+                await LoadSettingsAsync();
                 await ListenAsync();
             }
             catch (CoreNotRunningException)
@@ -336,6 +344,80 @@ public sealed partial class MainViewModel : ObservableObject
         oldValue?.ЗабутиРозкладку();
     }
 
+    private async Task LoadSettingsAsync()
+    {
+        if (_commands is null)
+        {
+            return;
+        }
+
+        try
+        {
+            Response resp = await _commands.CallAsync(new SettingsRequest(), _cts.Token);
+            if (resp.Kind == "settings")
+            {
+                await Dispatcher.UIThread.InvokeAsync(() =>
+                {
+                    if (resp.MaxConcurrent is uint n)
+                    {
+                        MaxConcurrentText = n.ToString();
+                    }
+
+                    if (resp.RateLimit is ulong r)
+                    {
+                        RateLimitText = (r / 1024).ToString();
+                    }
+                });
+            }
+        }
+        catch (Exception)
+        {
+            // Старе ядро без Settings — поля лишаються типовими.
+        }
+    }
+
+    [RelayCommand]
+    private async Task ApplySettingsAsync()
+    {
+        if (_commands is null)
+        {
+            return;
+        }
+
+        uint? max = uint.TryParse(MaxConcurrentText, out uint n) && n >= 1 ? n : null;
+        ulong? rate = ulong.TryParse(RateLimitText, out ulong kb) ? kb * 1024 : null;
+
+        Response resp = await _commands.CallAsync(new ConfigureRequest(max, rate), _cts.Token);
+        Status = resp.IsError
+            ? resp.Message ?? "не вдалося застосувати"
+            : "налаштування застосовано";
+    }
+
+    [RelayCommand]
+    private void OpenFolder(TaskRow? row)
+    {
+        string? dest = row?.Dest;
+        if (string.IsNullOrEmpty(dest))
+        {
+            Status = "шлях файла невідомий";
+            return;
+        }
+
+        try
+        {
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = "explorer.exe",
+                Arguments = $"/select,\"{dest}\"",
+                UseShellExecute = true,
+            });
+        }
+        catch (Exception e)
+        {
+            Status = $"не відкрити теку: {e.Message}";
+        }
+    }
+
     [RelayCommand]
     private async Task AddAsync()
     {
@@ -469,6 +551,9 @@ public sealed partial class TaskRow : ObservableObject
     [ObservableProperty]
     private string _url = "";
 
+    [ObservableProperty]
+    private string? _dest;
+
     /// <summary>Скільки зразків швидкості тримати.</summary>
     /// <remarks>
     /// Знімки приходять чотири рази на секунду, отже сто двадцять зразків —
@@ -508,6 +593,7 @@ public sealed partial class TaskRow : ObservableObject
         Активне = view.Status == "running";
 
         Url = view.Url;
+        Dest = view.Dest;
 
         SegmentsText = view.Segments > 1 ? $"{view.Segments} частин" : "";
 

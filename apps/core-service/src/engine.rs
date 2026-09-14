@@ -20,6 +20,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use downloader_core::protocol::{
@@ -80,6 +81,7 @@ impl Live {
             eta_secs: self.eta(),
             segments: self.segments,
             error: self.error.clone(),
+            dest: self.targets.first().map(|p| p.display().to_string()),
         }
     }
 
@@ -147,7 +149,9 @@ pub struct Engine {
     /// Тека за замовчуванням, коли клієнт не сказав, куди класти.
     downloads_dir: PathBuf,
     /// Скільки завдань качати одночасно. Решта чекають у `queued`.
-    max_concurrent: usize,
+    max_concurrent: AtomicUsize,
+    /// Ліміт байт/с на модуль. 0 — без обмеження.
+    rate_limit: AtomicU64,
 }
 
 impl Engine {
@@ -172,6 +176,10 @@ impl Engine {
             .and_then(|s| s.parse().ok())
             .filter(|&n: &usize| n >= 1)
             .unwrap_or(3);
+        let rate_limit = std::env::var("DOWNLOADER_RATE_LIMIT")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0);
 
         let engine = Arc::new(Self {
             store: Mutex::new(store),
@@ -180,11 +188,36 @@ impl Engine {
             registry,
             cancels: Mutex::new(HashMap::new()),
             downloads_dir,
-            max_concurrent,
+            max_concurrent: AtomicUsize::new(max_concurrent),
+            rate_limit: AtomicU64::new(rate_limit),
         });
 
         engine.clone().start_ticker();
         Ok(engine)
+    }
+
+    fn стеля(&self) -> usize {
+        self.max_concurrent.load(Ordering::Relaxed)
+    }
+
+    /// Поточні ліміти для вікна налаштувань.
+    pub fn settings(&self) -> (u32, u64) {
+        (
+            u32::try_from(self.стеля()).unwrap_or(u32::MAX),
+            self.rate_limit.load(Ordering::Relaxed),
+        )
+    }
+
+    /// Змінити стелю одночасних і/або ліміт швидкості.
+    pub fn configure(self: &Arc<Self>, max_concurrent: Option<u32>, rate_limit: Option<u64>) {
+        if let Some(n) = max_concurrent {
+            let n = usize::try_from(n).unwrap_or(1).max(1);
+            self.max_concurrent.store(n, Ordering::Relaxed);
+            self.clone().спробувати_наступне();
+        }
+        if let Some(r) = rate_limit {
+            self.rate_limit.store(r, Ordering::Relaxed);
+        }
     }
 
     /// Підписатись на потік подій.
@@ -321,7 +354,7 @@ impl Engine {
             live.values()
                 .filter(|t| t.status == Status::Running)
                 .count()
-                < self.max_concurrent
+                < self.стеля()
         };
 
         if let Ok(mut live) = self.live.lock() {
@@ -361,7 +394,7 @@ impl Engine {
             );
         } else {
             self.set_status(id, Status::Queued, None);
-            tracing::info!(id, "завдання в черзі (стеля {n} одночасних)", n = self.max_concurrent);
+            tracing::info!(id, "завдання в черзі (стеля {n} одночасних)", n = self.стеля());
         }
         Ok(id)
     }
@@ -392,10 +425,8 @@ impl Engine {
                 c.insert(id, cancel.clone());
             }
 
-            if let Ok(n) = std::env::var("DOWNLOADER_RATE_LIMIT")
-                && let Ok(limit) = n.parse::<u64>()
-                && limit > 0
-            {
+            let limit = self.rate_limit.load(Ordering::Relaxed);
+            if limit > 0 {
                 match module.set_rate_limit(limit) {
                     RateLimitSupport::Applied => {}
                     RateLimitSupport::Unsupported => {
@@ -468,7 +499,7 @@ impl Engine {
                 .values()
                 .filter(|t| t.status == Status::Running)
                 .count();
-            if running >= self.max_concurrent {
+            if running >= self.стеля() {
                 return;
             }
             let Some(next_id) = id_наступного_в_черзі(&live) else {
@@ -546,7 +577,7 @@ impl Engine {
             live.values()
                 .filter(|t| t.status == Status::Running)
                 .count()
-                < self.max_concurrent
+                < self.стеля()
         };
 
         if let Ok(mut live) = self.live.lock()

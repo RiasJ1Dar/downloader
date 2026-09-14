@@ -88,6 +88,17 @@ pub enum Request {
 
     /// Чи живе ядро.
     Ping,
+
+    /// Змінити стелю одночасних і ліміт швидкості. Порожні поля — не чіпати.
+    Configure {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_concurrent: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        rate_limit: Option<u64>,
+    },
+
+    /// Поточні ліміти.
+    Settings,
 }
 
 /// Відповідь ядра на запит.
@@ -109,6 +120,12 @@ pub enum Response {
 
     /// Розкладка частин завдання.
     Details { id: i64, parts: Vec<PartView> },
+
+    /// Поточні ліміти ядра.
+    Settings {
+        max_concurrent: u32,
+        rate_limit: u64,
+    },
 
     /// Зроблено.
     Ok,
@@ -192,6 +209,9 @@ pub struct TaskView {
     pub segments: usize,
     /// Текст помилки, якщо завдання впало.
     pub error: Option<String>,
+    /// Куди пишеться файл, якщо відомо.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dest: Option<String>,
 }
 
 impl TaskView {
@@ -292,6 +312,21 @@ mod tests {
     }
 
     #[test]
+    fn configure_без_полів_десеріалізується() {
+        let back: Request = serde_json::from_str(r#"{"kind":"configure"}"#).unwrap();
+        match back {
+            Request::Configure {
+                max_concurrent,
+                rate_limit,
+            } => {
+                assert!(max_concurrent.is_none());
+                assert!(rate_limit.is_none());
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
     fn невідома_команда_не_розбирається_мовчки() {
         let json = r#"{"kind":"самознищення"}"#;
         assert!(
@@ -357,6 +392,7 @@ mod tests {
             eta_secs: Some(5),
             segments: 4,
             error: None,
+            dest: None,
         }
     }
 }

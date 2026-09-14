@@ -95,6 +95,16 @@ public sealed record PingRequest : Request
     public override string Kind => "ping";
 }
 
+public sealed record SettingsRequest : Request
+{
+    public override string Kind => "settings";
+}
+
+public sealed record ConfigureRequest(uint? MaxConcurrent, ulong? RateLimit) : Request
+{
+    public override string Kind => "configure";
+}
+
 // ── Відповіді ───────────────────────────────────────────────────────────
 
 /// <summary>
@@ -127,6 +137,12 @@ public sealed class Response
 
     [JsonPropertyName("message")]
     public string? Message { get; set; }
+
+    [JsonPropertyName("max_concurrent")]
+    public uint? MaxConcurrent { get; set; }
+
+    [JsonPropertyName("rate_limit")]
+    public ulong? RateLimit { get; set; }
 
     /// <summary>Чи це відмова.</summary>
     public bool IsError => Kind == "error";
@@ -196,6 +212,9 @@ public sealed class TaskView
 
     [JsonPropertyName("error")]
     public string? Error { get; set; }
+
+    [JsonPropertyName("dest")]
+    public string? Dest { get; set; }
 
     /// <summary>
     /// Частка виконаного від 0 до 1, або <c>null</c>, коли розмір невідомий.
