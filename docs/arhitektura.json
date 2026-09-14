@@ -1,0 +1,347 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Downloader — архітектура",
+    "quality_profile": "showcase",
+    "views": [
+      {
+        "id": "shlyah-zavdannya",
+        "label": "Шлях завдання",
+        "focus": [
+          "ui",
+          "ipc",
+          "core",
+          "http",
+          "origin",
+          "files"
+        ],
+        "note": "Від посилання у вікні до байтів на диску."
+      },
+      {
+        "id": "klienty",
+        "label": "Три клієнти, один канал",
+        "focus": [
+          "ui",
+          "cli",
+          "ext",
+          "nmhost",
+          "ipc",
+          "core"
+        ],
+        "note": "Вікно, CLI і браузер говорять із ядром тим самим протоколом."
+      },
+      {
+        "id": "moduli",
+        "label": "Модулі за контрактом",
+        "focus": [
+          "core",
+          "http",
+          "stream",
+          "ytdlp",
+          "origin"
+        ],
+        "note": "Ядро не називає жодного протоколу на ім'я — лише реєстр і контракт."
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "ext",
+      "type": "external",
+      "label": "Розширення Chrome",
+      "sublabel": "MV3 · перехоплює завантаження",
+      "pos": [
+        40,
+        330
+      ],
+      "size": [
+        170,
+        66
+      ]
+    },
+    {
+      "id": "ui",
+      "type": "frontend",
+      "label": "Вікно",
+      "sublabel": "Avalonia 12 · .NET 10",
+      "pos": [
+        40,
+        110
+      ],
+      "size": [
+        170,
+        66
+      ],
+      "tag": "Windows · Linux · macOS"
+    },
+    {
+      "id": "cli",
+      "type": "frontend",
+      "label": "CLI dl",
+      "sublabel": "Rust · усе, що вміє вікно",
+      "pos": [
+        40,
+        220
+      ],
+      "size": [
+        170,
+        66
+      ]
+    },
+    {
+      "id": "nmhost",
+      "type": "backend",
+      "label": "downloader-nmhost",
+      "sublabel": "native messaging",
+      "pos": [
+        350,
+        330
+      ],
+      "size": [
+        170,
+        66
+      ]
+    },
+    {
+      "id": "ipc",
+      "type": "messagebus",
+      "label": "Локальний канал",
+      "sublabel": "named pipe / unix-сокет",
+      "pos": [
+        350,
+        180
+      ],
+      "size": [
+        170,
+        66
+      ],
+      "tag": "без TCP-порту"
+    },
+    {
+      "id": "core",
+      "type": "backend",
+      "label": "downloader-core",
+      "sublabel": "черга, прогрес, події · у треї",
+      "pos": [
+        560,
+        180
+      ],
+      "size": [
+        190,
+        78
+      ]
+    },
+    {
+      "id": "db",
+      "type": "database",
+      "label": "SQLite",
+      "sublabel": "task 1..N file 1..N segment",
+      "pos": [
+        560,
+        330
+      ],
+      "size": [
+        190,
+        66
+      ]
+    },
+    {
+      "id": "http",
+      "type": "backend",
+      "label": "proto-http",
+      "sublabel": "сегменти, If-Range, повтори",
+      "pos": [
+        850,
+        290
+      ],
+      "size": [
+        180,
+        66
+      ]
+    },
+    {
+      "id": "stream",
+      "type": "backend",
+      "label": "proto-hls · proto-dash",
+      "sublabel": "плейлисти, доріжки, злиття",
+      "pos": [
+        850,
+        70
+      ],
+      "size": [
+        180,
+        66
+      ]
+    },
+    {
+      "id": "ytdlp",
+      "type": "backend",
+      "label": "proto-ytdlp",
+      "sublabel": "зовнішній yt-dlp",
+      "pos": [
+        850,
+        180
+      ],
+      "size": [
+        180,
+        66
+      ]
+    },
+    {
+      "id": "origin",
+      "type": "external",
+      "label": "Сервер-джерело",
+      "sublabel": "HTTP(S) · CDN",
+      "pos": [
+        1130,
+        180
+      ],
+      "size": [
+        170,
+        66
+      ]
+    },
+    {
+      "id": "files",
+      "type": "database",
+      "label": "Файл на диску",
+      "sublabel": "дані → sync → стан .dlpart",
+      "pos": [
+        850,
+        400
+      ],
+      "size": [
+        180,
+        66
+      ],
+      "tag": "Mark-of-the-Web"
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "Процес ядра — переживає закриття вікна",
+      "wraps": [
+        "core",
+        "db",
+        "http",
+        "stream",
+        "ytdlp",
+        "files"
+      ]
+    },
+    {
+      "kind": "security-group",
+      "label": "Контракт Protocol — ядро не знає їхніх імен",
+      "wraps": [
+        "http",
+        "stream",
+        "ytdlp"
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "ui-ipc",
+      "from": "ui",
+      "to": "ipc",
+      "label": "кадр: 4 байти + JSON",
+      "variant": "emphasis",
+      "labelDy": -14
+    },
+    {
+      "id": "cli-ipc",
+      "from": "cli",
+      "to": "ipc"
+    },
+    {
+      "id": "ext-nmhost",
+      "from": "ext",
+      "to": "nmhost",
+      "label": "stdio"
+    },
+    {
+      "id": "nmhost-ipc",
+      "from": "nmhost",
+      "to": "ipc"
+    },
+    {
+      "id": "ipc-core",
+      "from": "ipc",
+      "to": "core",
+      "label": "запит · знімок списку",
+      "variant": "emphasis",
+      "labelDy": -27
+    },
+    {
+      "id": "core-db",
+      "from": "core",
+      "to": "db",
+      "label": "стан завдань",
+      "labelDy": 24
+    },
+    {
+      "id": "core-http",
+      "from": "core",
+      "to": "http",
+      "label": "хто візьме це посилання"
+    },
+    {
+      "id": "core-stream",
+      "from": "core",
+      "to": "stream"
+    },
+    {
+      "id": "core-ytdlp",
+      "from": "core",
+      "to": "ytdlp"
+    },
+    {
+      "id": "http-origin",
+      "from": "http",
+      "to": "origin",
+      "label": "Range: bytes=",
+      "variant": "emphasis"
+    },
+    {
+      "id": "stream-origin",
+      "from": "stream",
+      "to": "origin",
+      "variant": "dashed"
+    },
+    {
+      "id": "http-files",
+      "from": "http",
+      "to": "files",
+      "label": "позиційний запис",
+      "labelDy": 24
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Клієнти",
+      "items": [
+        "Вікно, CLI і браузер — рівні: один протокол, жодних коротких доріг",
+        "Канал лише локальний: named pipe, не TCP на 127.0.0.1"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Ядро",
+      "items": [
+        "Окремий процес у треї: вікно можна закрити, качання лишається",
+        "Рахує швидкість і залишок саме воно — інакше клієнти показували б різні числа"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Модулі",
+      "items": [
+        "Ядро питає реєстр «хто візьме це посилання», а не кличе HTTP напряму",
+        "Торент доточується новим модулем — контракт уже це передбачає"
+      ]
+    }
+  ]
+}
