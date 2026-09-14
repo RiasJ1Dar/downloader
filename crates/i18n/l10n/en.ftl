@@ -51,3 +51,4 @@ set-always = always
 set-quiet = night rate
 set-applied = settings saved in the core
 kb = KB
+ytdlp-updated = yt-dlp updated

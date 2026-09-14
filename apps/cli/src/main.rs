@@ -193,6 +193,9 @@ enum Command {
         #[arg(long)]
         clear_quiet: bool,
     },
+
+    /// Оновити зовнішній yt-dlp (`yt-dlp -U`).
+    YtdlpUpdate,
 }
 
 #[tokio::main]
@@ -502,6 +505,17 @@ async fn main() -> Result<()> {
             })
             .await?;
             println!("{}", t("set-applied"));
+        }
+
+        Command::YtdlpUpdate => {
+            let yt = YtdlpProtocol::new();
+            let text = yt.self_update().await?;
+            let trimmed = text.trim();
+            if trimmed.is_empty() {
+                println!("{}", t("ytdlp-updated"));
+            } else {
+                println!("{trimmed}");
+            }
         }
 
         Command::Probe { url } => {
@@ -1052,6 +1066,14 @@ mod tests {
                 assert!(!clear_schedule);
             }
             other => panic!("не configure: {other:?}"),
+        }
+
+        match Cli::try_parse_from(["dl", "ytdlp-update"]).expect("ytdlp-update") {
+            Cli {
+                command: Command::YtdlpUpdate,
+                ..
+            } => {}
+            other => panic!("не ytdlp-update: {other:?}"),
         }
     }
 

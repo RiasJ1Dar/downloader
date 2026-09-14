@@ -172,7 +172,10 @@ impl Engine {
             "ядро запущене без жодного модуля завантаження — качати нічим"
         );
 
-        let store = Store::open(db)?;
+        let mut store = Store::open(db)?;
+        if let Err(e) = store.seed_default_categories(&downloads_dir) {
+            tracing::warn!(error = %e, "типові категорії не записались");
+        }
         let (events, _) = broadcast::channel(EVENT_BUFFER);
 
         tracing::info!(модулі = ?registry.names(), "реєстр протоколів");
@@ -434,6 +437,15 @@ impl Engine {
                 }
             }
         };
+
+        if dest.is_none()
+            && let Err(e) = std::fs::create_dir_all(&base_dir)
+        {
+            anyhow::bail!(
+                "не вдалося створити теку категорії {}: {e}",
+                base_dir.display()
+            );
+        }
 
         let planned = paths_for_selected(&probed.files, dest.as_deref(), &base_dir);
         if planned.is_empty() {

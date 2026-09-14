@@ -486,6 +486,23 @@ impl Store {
             .find(|c| c.extensions.contains(&ext)))
     }
 
+    /// Типові категорії, лише якщо таблиця порожня. Теки ще не створюємо —
+    /// вони з'являться, коли туди вперше ляже файл.
+    pub fn seed_default_categories(&mut self, downloads: &Path) -> Result<usize> {
+        if !self.categories()?.is_empty() {
+            return Ok(0);
+        }
+        let rows: [(&str, &str, &[&str]); 3] = [
+            ("Відео", "Video", &["mp4", "mkv", "webm", "avi", "mov"]),
+            ("Аудіо", "Audio", &["mp3", "m4a", "flac", "ogg", "wav"]),
+            ("Архіви", "Archives", &["zip", "7z", "rar", "tar", "gz"]),
+        ];
+        for (name, folder, exts) in rows {
+            self.add_category(name, &downloads.join(folder), exts)?;
+        }
+        Ok(rows.len())
+    }
+
     // ── Налаштування ────────────────────────────────────────────────────
 
     /// Поточні правила ядра. Відсутня таблиця чи ключі — типові значення.
@@ -794,6 +811,17 @@ mod tests {
         assert_eq!(s.tasks().unwrap().len(), 2);
         assert_eq!(s.tasks_with_status(Status::Done).unwrap().len(), 1);
         assert_eq!(s.tasks_with_status(Status::Queued).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn типові_категорії_лише_коли_порожньо() {
+        let mut s = Store::in_memory().unwrap();
+        let n = s.seed_default_categories(Path::new("D:/Downloads")).unwrap();
+        assert_eq!(n, 3);
+        assert_eq!(s.seed_default_categories(Path::new("D:/Downloads")).unwrap(), 0);
+        let c = s.category_for("фільм.mkv").unwrap().expect("відео");
+        assert_eq!(c.name, "Відео");
+        assert_eq!(c.folder, PathBuf::from("D:/Downloads/Video"));
     }
 
     #[test]

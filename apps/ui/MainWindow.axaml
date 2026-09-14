@@ -55,13 +55,17 @@
                 </TextBox.KeyBindings>
             </TextBox>
 
-            <Button Grid.Column="1"
-                    Margin="8,0,0,0"
-                    Padding="18,0"
-                    Content="Завантажити"
-                    Command="{Binding AddCommand}"
-                    IsDefault="True"
-                    IsEnabled="{Binding Connected}"/>
+            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" Margin="8,0,0,0">
+                <Button Padding="14,0"
+                        Content="Буфер"
+                        Command="{Binding PasteAddCommand}"
+                        IsEnabled="{Binding Connected}"/>
+                <Button Padding="18,0"
+                        Content="Завантажити"
+                        Command="{Binding AddCommand}"
+                        IsDefault="True"
+                        IsEnabled="{Binding Connected}"/>
+            </StackPanel>
         </Grid>
 
         <!--

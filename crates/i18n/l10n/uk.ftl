@@ -51,3 +51,4 @@ set-always = завжди
 set-quiet = нічний ліміт
 set-applied = налаштування записано в ядро
 kb = КБ
+ytdlp-updated = yt-dlp оновлено

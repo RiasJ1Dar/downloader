@@ -33,6 +33,29 @@ impl YtdlpProtocol {
     pub fn with_bin(bin: impl Into<PathBuf>) -> Self {
         Self { bin: bin.into() }
     }
+
+    /// Самооновлення бінарника: `yt-dlp -U`. Текст без URL і токенів.
+    pub async fn self_update(&self) -> Result<String> {
+        let out = Command::new(&self.bin)
+            .args(["-U", "--no-warnings"])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+            .await
+            .map_err(|_| Error::Store("yt-dlp не знайдено в PATH".to_owned()))?;
+        let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
+        if text.trim().is_empty() {
+            text = String::from_utf8_lossy(&out.stderr).into_owned();
+        }
+        let text = обрізати_секрети(&text);
+        if !out.status.success() && text.contains("not found") {
+            return Err(Error::Store("yt-dlp не знайдено в PATH".to_owned()));
+        }
+        if !out.status.success() {
+            return Err(Error::Store(format!("yt-dlp -U: {text}")));
+        }
+        Ok(text)
+    }
 }
 
 impl Default for YtdlpProtocol {
@@ -233,6 +256,16 @@ mod tests {
         assert!(
             msg.contains("yt-dlp не знайдено в PATH"),
             "маємо: {msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn update_без_бінарника_називає_path() {
+        let p = YtdlpProtocol::with_bin("yt-dlp-немає-такого-бінарника-dl");
+        let err = p.self_update().await.expect_err("має впасти");
+        assert!(
+            err.to_string().contains("yt-dlp не знайдено в PATH"),
+            "маємо: {err}"
         );
     }
 

@@ -6,6 +6,8 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Avalonia;
+using Avalonia.Controls.ApplicationLifetimes;
+using Avalonia.Input.Platform;
 using Avalonia.Styling;
 using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -509,6 +511,77 @@ public sealed partial class MainViewModel : ObservableObject
 
         NewUrl = "";
         Status = $"завдання {resp.Id} прийнято";
+    }
+
+    /// <summary>Вставити http(s) з буфера й одразу додати, якщо є посилання.</summary>
+    [RelayCommand]
+    private async Task PasteAddAsync()
+    {
+        IClipboard? clip = ClipboardOfWindow();
+        if (clip is null)
+        {
+            Status = "буфер недоступний";
+            return;
+        }
+
+        string? text;
+        try
+        {
+            text = await clip.TryGetTextAsync();
+        }
+        catch (Exception e)
+        {
+            Status = $"буфер: {e.Message}";
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            Status = "у буфері немає тексту";
+            return;
+        }
+
+        string? url = FirstHttp(text);
+        if (url is null)
+        {
+            NewUrl = text.Trim();
+            Status = "у буфері немає http-посилання — рядок підставлено";
+            return;
+        }
+
+        NewUrl = url;
+        await AddAsync();
+    }
+
+    private static IClipboard? ClipboardOfWindow()
+    {
+        if (Application.Current?.ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
+        {
+            return desktop.MainWindow?.Clipboard;
+        }
+
+        return null;
+    }
+
+    private static string? FirstHttp(string text)
+    {
+        foreach (string raw in text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries))
+        {
+            string line = raw.Trim();
+            if (line.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
+                || line.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+            {
+                if (line.Contains("w3.org/", StringComparison.OrdinalIgnoreCase)
+                    || line.Contains("schema.org", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                return line;
+            }
+        }
+
+        return null;
     }
 
     [RelayCommand]
