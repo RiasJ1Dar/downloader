@@ -25,6 +25,7 @@ use downloader_proto_hls::HlsProtocol;
 use downloader_proto_ytdlp::YtdlpProtocol;
 use downloader_proto_http::download::{Options, download_with_probe};
 use downloader_proto_http::probe::{probe, probe_with_session};
+use downloader_i18n::{self as i18n, t, t_pairs};
 use downloader_winutil::{motw, names, paths, текст_буфера};
 
 #[derive(Parser, Debug)]
@@ -34,6 +35,10 @@ use downloader_winutil::{motw, names, paths, текст_буфера};
     about = "Менеджер завантажень: сегментоване качання з докачуванням"
 )]
 struct Cli {
+    /// Мова: `uk` або `en`. Без прапорця — мова ОС; російська ОС → українська.
+    #[arg(long, global = true)]
+    lang: Option<String>,
+
     #[command(subcommand)]
     command: Command,
 }
@@ -117,6 +122,16 @@ enum Command {
     /// Показати завдання ядра.
     List,
 
+    /// Показати, як завдання поділене на частини.
+    ///
+    /// Те саме, що показує смужка сегментів у вікні. Правило проєкту: усе,
+    /// що вміє вікно, спершу вміє CLI — інакше перша ж річ, зроблена «тільки
+    /// для вікна», лишиться без перевірки.
+    Parts {
+        /// Ідентифікатор зі `dl list`.
+        id: i64,
+    },
+
     /// Зупинити завдання ядра.
     Pause {
         /// Ідентифікатор зі `dl list`.
@@ -153,6 +168,7 @@ async fn main() -> Result<()> {
         .init();
 
     let cli = Cli::parse();
+    i18n::init(cli.lang.as_deref());
     let client = reqwest::Client::builder()
         .build()
         .context("не вдалося створити HTTP-клієнт")?;
@@ -192,7 +208,16 @@ async fn main() -> Result<()> {
                     })
                     .await?;
                 match resp {
-                    Response::Added { id } => println!("завдання {id} прийнято ядром: {url}"),
+                    Response::Added { id } => println!(
+                        "{}",
+                        t_pairs(
+                            "task-accepted",
+                            &[
+                                ("id", id.to_string()),
+                                ("url", url.clone()),
+                            ]
+                        )
+                    ),
                     Response::Error { message, .. } => anyhow::bail!(message),
                     other => anyhow::bail!("несподівана відповідь ядра: {other:?}"),
                 }
@@ -204,7 +229,7 @@ async fn main() -> Result<()> {
 
             match core.call(&Request::List).await? {
                 Response::Tasks { tasks } if tasks.is_empty() => {
-                    println!("завдань немає");
+                    println!("{}", t("no-tasks"));
                 }
                 Response::Tasks { tasks } => {
                     for t in tasks {
@@ -230,25 +255,61 @@ async fn main() -> Result<()> {
             }
         }
 
+        Command::Parts { id } => {
+            let mut core = client::Client::connect().await?;
+
+            match core.call(&Request::Details { id }).await? {
+                Response::Details { parts, .. } if parts.is_empty() => {
+                    println!("{}", t("no-layout"));
+                }
+                Response::Details { parts, .. } => {
+                    for (i, p) in parts.iter().enumerate() {
+                        let довжина = p.end.saturating_sub(p.start);
+                        let частка = if довжина > 0 {
+                            p.done as f64 / довжина as f64 * 100.0
+                        } else {
+                            100.0
+                        };
+
+                        println!(
+                            "{:>3}  {:>14} … {:<14} {:>10} з {:>10}  {:>5.1}%  {}",
+                            i,
+                            p.start,
+                            p.end,
+                            format_size(p.done),
+                            format_size(довжина),
+                            частка,
+                            смужка(частка),
+                        );
+                    }
+                }
+                Response::Error { message, .. } => anyhow::bail!(message),
+                other => anyhow::bail!("несподівана відповідь ядра: {other:?}"),
+            }
+        }
+
         Command::Pause { id } => {
             let mut core = client::Client::connect().await?;
             core.call_ok(&Request::Pause { id }).await?;
-            println!("завдання {id} зупиняється");
+            println!("{}", t_pairs("task-paused", &[("id", id.to_string())]));
         }
 
         Command::Resume { id } => {
             let mut core = client::Client::connect().await?;
             core.call_ok(&Request::Resume { id }).await?;
-            println!("завдання {id} продовжено");
+            println!("{}", t_pairs("task-resumed", &[("id", id.to_string())]));
         }
 
         Command::Rm { id, with_file } => {
             let mut core = client::Client::connect().await?;
             core.call_ok(&Request::Remove { id, with_file }).await?;
             if with_file {
-                println!("завдання {id} прибрано разом із файлом");
+                println!(
+                    "{}",
+                    t_pairs("task-removed-file", &[("id", id.to_string())])
+                );
             } else {
-                println!("завдання {id} прибрано зі списку");
+                println!("{}", t_pairs("task-removed", &[("id", id.to_string())]));
             }
         }
 
@@ -256,7 +317,7 @@ async fn main() -> Result<()> {
             let core = client::Client::connect().await?;
             let mut events = core.subscribe().await?;
 
-            println!("стежу за ядром, Ctrl+C щоб вийти");
+            println!("{}", t("watching"));
 
             while let Some(event) = events.next().await? {
                 match event {
@@ -280,15 +341,34 @@ async fn main() -> Result<()> {
                         }
                     }
                     Event::Finished { id, path, bytes } => {
-                        println!("✓ завдання {id} готове: {} — {path}", format_size(bytes));
+                        println!(
+                            "✓ {}",
+                            t_pairs(
+                                "task-done",
+                                &[
+                                    ("id", id.to_string()),
+                                    ("size", format_size(bytes)),
+                                    ("path", path),
+                                ]
+                            )
+                        );
                     }
                     Event::Failed { id, message } => {
-                        println!("✗ завдання {id} впало: {message}");
+                        println!(
+                            "✗ {}",
+                            t_pairs(
+                                "task-failed",
+                                &[
+                                    ("id", id.to_string()),
+                                    ("message", message),
+                                ]
+                            )
+                        );
                     }
                 }
             }
 
-            println!("ядро закрило з'єднання");
+            println!("{}", t("core-closed"));
         }
 
         Command::Probe { url } => {
@@ -431,7 +511,10 @@ async fn main() -> Result<()> {
             // мітка просто не запишеться, і людина має про це знати.
             match motw::mark(&out.path, Some(&info.final_url), None) {
                 Ok(()) => {}
-                Err(e) => println!("⚠ не вдалося позначити файл як завантажений з мережі: {e}"),
+                Err(e) => println!(
+                    "⚠ {}",
+                    t_pairs("motw-fail", &[("error", e.to_string())])
+                ),
             }
         }
     }
@@ -471,7 +554,7 @@ fn зібрати_адреси(
         out.extend(expand::розгорнути_шаблон(u.trim())?);
     }
     if out.is_empty() {
-        bail!("вкажіть посилання, --list або --clipboard");
+        bail!("{}", t("need-url"));
     }
     Ok(expand::унікальні_порядком(out))
 }
@@ -527,7 +610,7 @@ async fn качати_модулем(
         match p.set_rate_limit(limit_kb.saturating_mul(1024)) {
             RateLimitSupport::Applied => {}
             RateLimitSupport::Unsupported => {
-                println!("⚠ ліміт швидкості цей протокол не вміє застосувати");
+                println!("⚠ {}", t("rate-unsupported"));
             }
         }
     }
@@ -569,7 +652,7 @@ async fn качати_модулем(
         session,
     };
     if p.run(ctx, &НімийПрогрес).await?.is_some() {
-        println!("завантаження зупинено до завершення");
+        println!("{}", t("stopped-early"));
     }
 
     let secs = started.elapsed().as_secs_f64().max(0.001);
@@ -581,7 +664,10 @@ async fn качати_модулем(
                 match motw::mark(dest, Some(url), None) {
                     Ok(()) => {}
                     Err(e) => {
-                        println!("⚠ не вдалося позначити файл як завантажений з мережі: {e}");
+                        println!(
+                            "⚠ {}",
+                            t_pairs("motw-fail", &[("error", e.to_string())])
+                        );
                     }
                 }
                 println!("файл:   {}", dest.display());
@@ -605,7 +691,7 @@ async fn качати_модулем(
 fn шляхи_для_обраних(out: Option<PathBuf>, files: &[PlannedFile]) -> Result<Vec<PathBuf>> {
     let обрані: Vec<&PlannedFile> = files.iter().filter(|f| f.selected).collect();
     if обрані.is_empty() {
-        bail!("HLS-проба не дала жодного обраного файла");
+        bail!("{}", t("need-selected"));
     }
 
     match out {
@@ -636,6 +722,16 @@ fn шляхи_для_обраних(out: Option<PathBuf>, files: &[PlannedFile])
 }
 
 /// Розмір у зрозумілому вигляді.
+/// Смужка виконаного для консолі.
+///
+/// У консолі немає кольору, на який можна покластися, тож частка малюється
+/// знаками: інакше двадцять рядків чисел не читаються з першого погляду.
+fn смужка(частка: f64) -> String {
+    const ШИРИНА: usize = 20;
+    let повних = ((частка / 100.0).clamp(0.0, 1.0) * ШИРИНА as f64).round() as usize;
+    format!("[{}{}]", "█".repeat(повних), "·".repeat(ШИРИНА - повних))
+}
+
 fn format_size(bytes: u64) -> String {
     const ОДИНИЦІ: [&str; 5] = ["Б", "КБ", "МБ", "ГБ", "ТБ"];
     let mut value = bytes as f64;
@@ -665,6 +761,7 @@ mod tests {
         match Cli::try_parse_from(["dl", "pause", "7"]).expect("pause") {
             Cli {
                 command: Command::Pause { id },
+                ..
             } => assert_eq!(id, 7),
             other => panic!("не pause: {other:?}"),
         }
@@ -672,6 +769,7 @@ mod tests {
         match Cli::try_parse_from(["dl", "resume", "7"]).expect("resume") {
             Cli {
                 command: Command::Resume { id },
+                ..
             } => assert_eq!(id, 7),
             other => panic!("не resume: {other:?}"),
         }
@@ -679,6 +777,7 @@ mod tests {
         match Cli::try_parse_from(["dl", "rm", "7", "--with-file"]).expect("rm") {
             Cli {
                 command: Command::Rm { id, with_file },
+                ..
             } => {
                 assert_eq!(id, 7);
                 assert!(with_file);
@@ -689,6 +788,7 @@ mod tests {
         match Cli::try_parse_from(["dl", "rm", "3"]).expect("rm без файла") {
             Cli {
                 command: Command::Rm { id, with_file },
+                ..
             } => {
                 assert_eq!(id, 3);
                 assert!(!with_file);
@@ -704,6 +804,7 @@ mod tests {
                     list: None,
                     ..
                 },
+                ..
             } => {}
             other => panic!("не add --clipboard: {other:?}"),
         }
@@ -715,6 +816,7 @@ mod tests {
                     clipboard: false,
                     ..
                 },
+                ..
             } => assert!(u.contains("[001-002]")),
             other => panic!("не add шаблон: {other:?}"),
         }
@@ -736,6 +838,7 @@ mod tests {
                     referer,
                     ..
                 },
+                ..
             } => {
                 assert_eq!(cookie.as_deref(), Some("n=v; n2=v2"));
                 assert_eq!(referer.as_deref(), Some("http://ex.com/"));
@@ -760,6 +863,7 @@ mod tests {
                     referer,
                     ..
                 },
+                ..
             } => {
                 assert_eq!(cookie.as_deref(), Some("session=ok"));
                 assert_eq!(referer.as_deref(), Some("http://ex.com/page"));

@@ -9,6 +9,7 @@ members = [
     "crates/proto-external",
     "crates/proto-ytdlp",
     "crates/winutil",
+    "crates/i18n",
     "crates/testserver",
     "apps/cli",
     "apps/core-service",
@@ -32,6 +33,11 @@ downloader-proto-external = { path = "crates/proto-external" }
 downloader-proto-ytdlp = { path = "crates/proto-ytdlp" }
 downloader-winutil = { path = "crates/winutil" }
 downloader-ipc = { path = "crates/ipc" }
+downloader-i18n = { path = "crates/i18n" }
+
+fluent-bundle = "0.15"
+unic-langid = { version = "0.9", features = ["macros"] }
+sys-locale = "0.3"
 
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
