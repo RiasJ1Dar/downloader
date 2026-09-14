@@ -197,6 +197,10 @@ impl Protocol for HttpProtocol {
             return Ok(Some(Vec::new()));
         }
 
+        // Лічильник у RAM не доказ: після truncate файл на диску має бути
+        // рівно `out.bytes`. Інакше віддамо людині дірку правильної «довжини».
+        downloader_core::verify::length(dest, out.bytes)?;
+
         // Завдання завершене — стану відновлення не лишається.
         Ok(None)
     }

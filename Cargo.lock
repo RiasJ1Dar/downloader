@@ -684,9 +684,11 @@ name = "downloader-core"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "hex",
  "rusqlite",
  "serde",
  "serde_json",
+ "sha2",
  "thiserror 2.0.20",
  "tokio",
  "tracing",

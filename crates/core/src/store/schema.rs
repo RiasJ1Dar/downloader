@@ -26,7 +26,7 @@ use crate::error::{Error, Result};
 ///
 /// Зростає з кожною несумісною зміною. База новішої версії відкриттю не
 /// підлягає: старша програма не знає про нові поля й тихо їх загубить.
-pub const SCHEMA_VERSION: i64 = 2;
+pub const SCHEMA_VERSION: i64 = 3;
 
 /// Налаштування з'єднання.
 ///
@@ -75,6 +75,9 @@ pub fn migrate(conn: &Connection) -> Result<()> {
     }
     if current < 2 {
         conn.execute_batch(V2).map_err(db_err)?;
+    }
+    if current < 3 {
+        conn.execute_batch(V3).map_err(db_err)?;
     }
 
     conn.pragma_update(None, "user_version", SCHEMA_VERSION)
@@ -154,6 +157,11 @@ CREATE TABLE IF NOT EXISTS setting (
     key    TEXT PRIMARY KEY,
     value  TEXT NOT NULL
 );
+"#;
+
+/// Контрольна сума готового файла — окремо від ETag (`fingerprint`).
+const V3: &str = r#"
+ALTER TABLE file ADD COLUMN checksum TEXT;
 "#;
 
 #[cfg(test)]

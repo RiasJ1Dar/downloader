@@ -457,4 +457,26 @@ mod tests {
         let tmp = Temp::new("cleanup");
         assert!(remove(&tmp.0).is_ok(), "нема чого прибирати — теж успіх");
     }
+
+    #[test]
+    fn тисяча_зіпсованих_станів_не_виглядають_як_валідні() {
+        let tmp = Temp::new("crash1000");
+        let (_, state) = зразок();
+        save(&tmp.0, &state).unwrap();
+        let path = state_path(&tmp.0);
+        let intact = std::fs::read(&path).unwrap();
+        assert!(!intact.is_empty());
+
+        for i in 0..1000u32 {
+            let cut = (i as usize) % intact.len();
+            std::fs::write(&path, &intact[..cut]).unwrap();
+            match load(&tmp.0) {
+                Err(LoadError::Corrupt(_) | LoadError::Unreadable(_) | LoadError::Absent) => {}
+                Ok(_) => panic!("обрізаний стан на кроці {i} прийнято як валідний"),
+            }
+        }
+
+        save(&tmp.0, &state).unwrap();
+        assert_eq!(load(&tmp.0).unwrap().downloaded(), 150);
+    }
 }

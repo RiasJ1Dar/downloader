@@ -208,8 +208,78 @@ impl Engine {
             вікно_було: std::sync::atomic::AtomicBool::new(вікно),
         });
 
+        engine.відновити_з_бази()?;
         engine.clone().start_ticker();
+        engine.clone().спробувати_наступне();
         Ok(engine)
+    }
+
+    /// Підняти список із бази після рестарту процесу ядра.
+    ///
+    /// `running` у момент падіння стає `queued`: sidecar поруч із файлом
+    /// докачає, а два планувальники на один файл не з'являться.
+    fn відновити_з_бази(self: &Arc<Self>) -> anyhow::Result<()> {
+        let mut store = self
+            .store
+            .lock()
+            .map_err(|_| anyhow::anyhow!("сховище отруєно"))?;
+        let tasks = store.tasks()?;
+        let mut loaded = Vec::new();
+        for t in tasks {
+            let files = store.files(t.id)?;
+            let targets: Vec<PathBuf> = files.iter().map(|f| f.path.clone()).collect();
+            let done: u64 = files.iter().map(|f| f.done).sum();
+            let total: Option<u64> = {
+                let sizes: Vec<u64> = files.iter().filter_map(|f| f.size).collect();
+                if sizes.len() == files.len() && !sizes.is_empty() {
+                    Some(sizes.iter().sum())
+                } else {
+                    None
+                }
+            };
+            let done = targets.first().map_or(done, |p| {
+                downloader_core::state::load(p)
+                    .map(|s| s.downloaded())
+                    .unwrap_or(done)
+            });
+            let mut status = t.status;
+            if status == Status::Running {
+                store.set_status(t.id, Status::Queued, None)?;
+                status = Status::Queued;
+            }
+            let name = t.title.clone().unwrap_or_else(|| {
+                targets
+                    .first()
+                    .and_then(|p| p.file_name())
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| names::ЗАПАСНЕ_ІМʼЯ.to_owned())
+            });
+            loaded.push(Live {
+                id: t.id,
+                url: t.url,
+                name,
+                status,
+                done,
+                total,
+                segments: 0,
+                error: t.error,
+                prev_done: done,
+                speed: 0,
+                session: Session::default(),
+                protocol: t.protocol,
+                targets,
+                parts: Vec::new(),
+            });
+        }
+        drop(store);
+        let mut live = self
+            .live
+            .lock()
+            .map_err(|_| anyhow::anyhow!("список завдань отруєно"))?;
+        for row in loaded {
+            live.insert(row.id, row);
+        }
+        Ok(())
     }
 
     fn стеля(&self) -> usize {
@@ -344,7 +414,28 @@ impl Engine {
             anyhow::bail!("модуль {protocol_name} не назвав жодного файла для {url}");
         }
 
-        let planned = paths_for_selected(&probed.files, dest.as_deref(), &self.downloads_dir);
+        let (base_dir, category_id) = {
+            let store = self
+                .store
+                .lock()
+                .map_err(|_| anyhow::anyhow!("сховище отруєно"))?;
+            if dest.is_some() {
+                (self.downloads_dir.clone(), None)
+            } else {
+                let name = probed
+                    .files
+                    .iter()
+                    .find(|f| f.selected)
+                    .map(|f| f.suggested_name.as_str())
+                    .unwrap_or("");
+                match store.category_for(name)? {
+                    Some(c) => (c.folder, Some(c.id)),
+                    None => (self.downloads_dir.clone(), None),
+                }
+            }
+        };
+
+        let planned = paths_for_selected(&probed.files, dest.as_deref(), &base_dir);
         if planned.is_empty() {
             anyhow::bail!("модуль {protocol_name} не обрав жодного файла для {url}");
         }
@@ -365,7 +456,7 @@ impl Engine {
                 url: probed.final_url.clone(),
                 protocol: protocol_name.clone(),
                 title: None,
-                category_id: None,
+                category_id,
                 files: planned
                     .iter()
                     .map(|(path, size)| NewFile {
@@ -523,6 +614,10 @@ impl Engine {
                     }
 
                     let bytes = self.finish(id);
+                    if let Err(e) = self.зафіксувати_перевірку(id, bytes) {
+                        self.fail(id, &e.to_string());
+                        return;
+                    }
                     let path = ctx
                         .targets
                         .first()
@@ -937,6 +1032,37 @@ fn черга_спорожніла(live: &HashMap<i64, Live>) -> bool {
 }
 
 impl Engine {
+    /// Звірити лічильник із диском і записати SHA-256. Не довіряти RAM.
+    fn зафіксувати_перевірку(&self, id: i64, bytes: u64) -> anyhow::Result<()> {
+        let files = {
+            let store = self
+                .store
+                .lock()
+                .map_err(|_| anyhow::anyhow!("сховище отруєно"))?;
+            store.files(id)?
+        };
+        if files.len() == 1 {
+            let f = &files[0];
+            downloader_core::verify::length(&f.path, bytes)?;
+            let hash = downloader_core::verify::sha256(&f.path)?;
+            let mut store = self
+                .store
+                .lock()
+                .map_err(|_| anyhow::anyhow!("сховище отруєно"))?;
+            store.set_file_checksum(f.id, &hash)?;
+        } else {
+            for f in &files {
+                let hash = downloader_core::verify::sha256(&f.path)?;
+                let mut store = self
+                    .store
+                    .lock()
+                    .map_err(|_| anyhow::anyhow!("сховище отруєно"))?;
+                store.set_file_checksum(f.id, &hash)?;
+            }
+        }
+        Ok(())
+    }
+
     fn черга_порожня(&self) -> bool {
         self.live
             .lock()

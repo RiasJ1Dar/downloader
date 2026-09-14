@@ -96,6 +96,8 @@ pub struct FileRow {
     pub fingerprint: Option<String>,
     pub selected: bool,
     pub done: u64,
+    /// SHA-256 готового файла, якщо вже пораховано.
+    pub checksum: Option<String>,
 }
 
 /// Категорія з текою призначення.
@@ -300,7 +302,7 @@ impl Store {
         let mut stmt = self
             .conn
             .prepare(
-                "SELECT id, task_id, idx, path, size, fingerprint, selected, done
+                "SELECT id, task_id, idx, path, size, fingerprint, selected, done, checksum
                  FROM file WHERE task_id = ?1 ORDER BY idx",
             )
             .map_err(db)?;
@@ -316,6 +318,7 @@ impl Store {
                     fingerprint: row.get(5)?,
                     selected: row.get::<_, i64>(6)? != 0,
                     done: row.get::<_, i64>(7)? as u64,
+                    checksum: row.get(8)?,
                 })
             })
             .map_err(db)?;
@@ -325,6 +328,17 @@ impl Store {
             out.push(r.map_err(db)?);
         }
         Ok(out)
+    }
+
+    /// Записати SHA-256 готового файла.
+    pub fn set_file_checksum(&mut self, file_id: FileId, checksum: &str) -> Result<()> {
+        self.conn
+            .execute(
+                "UPDATE file SET checksum = ?2 WHERE id = ?1",
+                params![file_id, checksum],
+            )
+            .map_err(db)?;
+        Ok(())
     }
 
     /// Оновити, скільки завантажено у файлі.
@@ -891,6 +905,17 @@ mod tests {
         let back = s.settings().unwrap();
         assert!(back.schedule_from.is_none());
         assert!(back.schedule_to.is_none());
+    }
+
+    #[test]
+    fn checksum_переживає_перезапуск() {
+        let mut s = Store::in_memory().unwrap();
+        let id = s
+            .add_task(&звичайне_завдання("https://e.com/f.bin", "f.bin"))
+            .unwrap();
+        let fid = s.files(id).unwrap()[0].id;
+        s.set_file_checksum(fid, "abc").unwrap();
+        assert_eq!(s.files(id).unwrap()[0].checksum.as_deref(), Some("abc"));
     }
 
     #[test]

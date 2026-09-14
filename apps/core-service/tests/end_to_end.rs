@@ -418,3 +418,82 @@ async fn налаштування_переживають_рестарт_ядра
     let _ = std::fs::remove_dir_all(&downloads);
     Ok(())
 }
+
+#[tokio::test]
+async fn список_завдань_переживає_рестарт_ядра() -> anyhow::Result<()> {
+    let server = EvilServer::start().await?;
+    let mut ядро = Ядро::запустити("restore")?;
+    ядро.прибрати_теку = false;
+    let mut client = ядро.дочекатись().await?;
+    привітатись(&mut client).await?;
+
+    write_frame(
+        &mut client,
+        &Request::Add {
+            url: server.url("/slow-range/1m/256k"),
+            dest: Some(ядро.data.join("довге.bin").display().to_string()),
+            parts: Some(2),
+            cookies: None,
+            referer: None,
+        },
+    )
+    .await?;
+    let id = match read_frame::<_, Response>(&mut client).await? {
+        Response::Added { id } => id,
+        other => anyhow::bail!("add: {other:?}"),
+    };
+
+    let db = ядро.data.join("tasks.db");
+    let downloads = ядро.data.clone();
+    ядро.зупинити();
+    drop(client);
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    let unique = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let pipe = if cfg!(windows) {
+        format!(r"\\.\pipe\downloader-e2e-restore2-{unique}")
+    } else {
+        format!("/tmp/downloader-e2e-restore2-{unique}.sock")
+    };
+    let mut child = Command::new(env!("CARGO_BIN_EXE_downloader-core"))
+        .arg("--pipe")
+        .arg(&pipe)
+        .arg("--db")
+        .arg(&db)
+        .arg("--downloads")
+        .arg(&downloads)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()?;
+
+    let mut client2 = {
+        let mut s = None;
+        for _ in 0..100 {
+            if let Ok(c) = connect_to(&pipe).await {
+                s = Some(c);
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        s.ok_or_else(|| anyhow::anyhow!("друге ядро не підняло канал"))?
+    };
+    привітатись(&mut client2).await?;
+    write_frame(&mut client2, &Request::List).await?;
+    match read_frame::<_, Response>(&mut client2).await? {
+        Response::Tasks { tasks } => {
+            assert_eq!(tasks.len(), 1, "після рестарту список порожній");
+            assert_eq!(tasks[0].id, id);
+            assert_eq!(tasks[0].name, "довге.bin");
+        }
+        other => anyhow::bail!("list: {other:?}"),
+    }
+
+    let _ = child.kill();
+    let _ = child.wait();
+    let _ = std::fs::remove_dir_all(&downloads);
+    server.shutdown().await;
+    Ok(())
+}

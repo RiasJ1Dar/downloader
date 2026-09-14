@@ -16,6 +16,7 @@ pub mod schedule;
 pub mod segments;
 pub mod state;
 pub mod store;
+pub mod verify;
 
 pub use error::{Error, Result};
 pub use file::SparseFile;
@@ -96,5 +97,56 @@ mod tests {
         // Людина має впізнати помилку за симптомом, а не за назвою типу.
         assert!(text.contains("example.com/file.iso"), "у тексті немає URL: {text}");
         assert!(text.contains("докачування неможливе"), "текст не пояснює наслідок: {text}");
+    }
+
+    #[test]
+    fn крейт_ядра_не_залежить_від_іменованих_протоколів() {
+        let toml = include_str!("../Cargo.toml");
+        for заборона in [
+            "downloader-proto-http",
+            "downloader-proto-hls",
+            "downloader-proto-dash",
+            "downloader-proto-ytdlp",
+        ] {
+            assert!(
+                !toml.contains(заборона),
+                "ядро тягне {заборона} — межа Protocol зламана"
+            );
+        }
+
+        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut hits = Vec::new();
+        fn walk(dir: &std::path::Path, hits: &mut Vec<String>) {
+            let Ok(rd) = std::fs::read_dir(dir) else {
+                return;
+            };
+            for e in rd.flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    walk(&p, hits);
+                    continue;
+                }
+                if p.extension().and_then(|x| x.to_str()) != Some("rs") {
+                    continue;
+                }
+                // Сам цей тест згадує імена як заборонені рядки.
+                if p.file_name().and_then(|n| n.to_str()) == Some("lib.rs") {
+                    continue;
+                }
+                let Ok(text) = std::fs::read_to_string(&p) else {
+                    continue;
+                };
+                for маркер in ["HttpProtocol", "HlsProtocol", "DashProtocol", "YtdlpProtocol"] {
+                    if text.contains(маркер) {
+                        hits.push(format!("{}:{маркер}", p.display()));
+                    }
+                }
+            }
+        }
+        walk(&src, &mut hits);
+        assert!(
+            hits.is_empty(),
+            "ядро згадує протокол на ім'я: {hits:?}"
+        );
     }
 }
