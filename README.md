@@ -4,7 +4,7 @@
 
 ![Архітектура](docs/architecture.png)
 
-Інтерактивна схема: [docs/architecture.html](docs/architecture.html). Кнопки переглядача — англійською.
+Інтерактивна схема: [docs/architecture.html](docs/architecture.html). Кнопки переглядача — англійською. Джерело — Archify JSON у `docs/architecture.json`.
 
 ## Де що
 
