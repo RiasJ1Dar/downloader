@@ -4,6 +4,7 @@ using System.IO;
 using System.IO.Pipes;
 using System.Threading;
 using System.Threading.Tasks;
+using Downloader.Ui.I18n;
 
 namespace Downloader.Ui.Ipc;
 
@@ -105,7 +106,7 @@ public sealed class CoreClient : IAsyncDisposable
             .ConfigureAwait(false);
 
         Response? resp = await Frame.ReadAsync<Response>(_stream, ct).ConfigureAwait(false)
-            ?? throw new IpcException("ядро закрило з'єднання під час рукостискання");
+            ?? throw new IpcException(Каталог.T("ui-core-closed-handshake"));
 
         if (resp.IsError)
         {
@@ -128,7 +129,7 @@ public sealed class CoreClient : IAsyncDisposable
         await Frame.WriteAsync(_stream, request, ct).ConfigureAwait(false);
 
         return await Frame.ReadAsync<Response>(_stream, ct).ConfigureAwait(false)
-            ?? throw new IpcException("ядро закрило з'єднання, не відповівши");
+            ?? throw new IpcException(Каталог.T("ui-core-closed-reply"));
     }
 
     /// <summary>

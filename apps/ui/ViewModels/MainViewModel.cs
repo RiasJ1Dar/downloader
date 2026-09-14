@@ -12,6 +12,7 @@ using Avalonia.Styling;
 using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using Downloader.Ui.I18n;
 using Downloader.Ui.Ipc;
 
 namespace Downloader.Ui.ViewModels;
@@ -52,7 +53,7 @@ public sealed partial class MainViewModel : ObservableObject
     private string _newUrl = "";
 
     [ObservableProperty]
-    private string _status = "під'єднуюсь до ядра…";
+    private string _status = Каталог.T("ui-connecting");
 
     [ObservableProperty]
     private bool _connected;
@@ -139,7 +140,7 @@ public sealed partial class MainViewModel : ObservableObject
                 await Dispatcher.UIThread.InvokeAsync(() =>
                 {
                     Connected = true;
-                    Status = "з'єднано з ядром";
+                    Status = Каталог.T("ui-connected");
                 });
 
                 await LoadSettingsAsync();
@@ -151,7 +152,7 @@ public sealed partial class MainViewModel : ObservableObject
                 await Dispatcher.UIThread.InvokeAsync(() =>
                 {
                     Connected = false;
-                    Status = "ядро не запущене — запустіть downloader-core";
+                    Status = Каталог.T("ui-core-missing");
                 });
             }
             catch (Exception e)
@@ -160,7 +161,7 @@ public sealed partial class MainViewModel : ObservableObject
                 await Dispatcher.UIThread.InvokeAsync(() =>
                 {
                     Connected = false;
-                    Status = $"зв'язок із ядром обірвався: {e.Message}";
+                    Status = Каталог.T("ui-link-lost", ("message", e.Message));
                 });
             }
 
@@ -291,12 +292,12 @@ public sealed partial class MainViewModel : ObservableObject
 
                 case "finished":
                     await Dispatcher.UIThread.InvokeAsync(() =>
-                        Status = $"готово: {ev.Path}");
+                        Status = Каталог.T("ui-finished", ("path", ev.Path ?? "")));
                     break;
 
                 case "failed":
                     await Dispatcher.UIThread.InvokeAsync(() =>
-                        Status = $"завдання {ev.Id} впало: {ev.Message}");
+                        Status = Каталог.T("task-failed", ("id", ev.Id ?? 0), ("message", ev.Message ?? "")));
                     break;
             }
         }
@@ -463,8 +464,8 @@ public sealed partial class MainViewModel : ObservableObject
                 quiet),
             _cts.Token);
         Status = resp.IsError
-            ? resp.Message ?? "не вдалося застосувати"
-            : "налаштування застосовано";
+            ? resp.Message ?? Каталог.T("ui-apply-failed")
+            : Каталог.T("set-applied");
     }
 
     [RelayCommand]
@@ -473,7 +474,7 @@ public sealed partial class MainViewModel : ObservableObject
         string? dest = row?.Dest;
         if (string.IsNullOrEmpty(dest))
         {
-            Status = "шлях файла невідомий";
+            Status = Каталог.T("ui-path-unknown");
             return;
         }
 
@@ -488,7 +489,7 @@ public sealed partial class MainViewModel : ObservableObject
         }
         catch (Exception e)
         {
-            Status = $"не відкрити теку: {e.Message}";
+            Status = Каталог.T("ui-open-failed", ("message", e.Message));
         }
     }
 
@@ -505,12 +506,12 @@ public sealed partial class MainViewModel : ObservableObject
 
         if (resp.IsError)
         {
-            Status = resp.Message ?? "ядро відмовило без пояснення";
+            Status = resp.Message ?? Каталог.T("ui-core-refused");
             return;
         }
 
         NewUrl = "";
-        Status = $"завдання {resp.Id} прийнято";
+        Status = Каталог.T("ui-task-accepted", ("id", resp.Id ?? 0));
     }
 
     /// <summary>Вставити http(s) з буфера й одразу додати, якщо є посилання.</summary>
@@ -520,7 +521,7 @@ public sealed partial class MainViewModel : ObservableObject
         IClipboard? clip = ClipboardOfWindow();
         if (clip is null)
         {
-            Status = "буфер недоступний";
+            Status = Каталог.T("ui-clipboard-unavailable");
             return;
         }
 
@@ -531,13 +532,13 @@ public sealed partial class MainViewModel : ObservableObject
         }
         catch (Exception e)
         {
-            Status = $"буфер: {e.Message}";
+            Status = Каталог.T("ui-clipboard-error", ("message", e.Message));
             return;
         }
 
         if (string.IsNullOrWhiteSpace(text))
         {
-            Status = "у буфері немає тексту";
+            Status = Каталог.T("ui-clipboard-empty");
             return;
         }
 
@@ -545,7 +546,7 @@ public sealed partial class MainViewModel : ObservableObject
         if (url is null)
         {
             NewUrl = text.Trim();
-            Status = "у буфері немає http-посилання — рядок підставлено";
+            Status = Каталог.T("ui-clipboard-nolink");
             return;
         }
 
@@ -595,7 +596,7 @@ public sealed partial class MainViewModel : ObservableObject
         Response resp = await _commands.CallAsync(new PauseRequest(row.Id), _cts.Token);
         if (resp.IsError)
         {
-            Status = resp.Message ?? "не вдалося зупинити";
+            Status = resp.Message ?? Каталог.T("ui-pause-failed");
         }
     }
 
@@ -610,7 +611,7 @@ public sealed partial class MainViewModel : ObservableObject
         Response resp = await _commands.CallAsync(new ResumeRequest(row.Id), _cts.Token);
         if (resp.IsError)
         {
-            Status = resp.Message ?? "не вдалося продовжити";
+            Status = resp.Message ?? Каталог.T("ui-resume-failed");
         }
     }
 
@@ -630,7 +631,7 @@ public sealed partial class MainViewModel : ObservableObject
 
         if (resp.IsError)
         {
-            Status = resp.Message ?? "не вдалося прибрати";
+            Status = resp.Message ?? Каталог.T("ui-remove-failed");
         }
     }
 
@@ -740,7 +741,9 @@ public sealed partial class TaskRow : ObservableObject
         Url = view.Url;
         Dest = view.Dest;
 
-        SegmentsText = view.Segments > 1 ? $"{view.Segments} частин" : "";
+        SegmentsText = view.Segments > 1
+            ? $"{view.Segments} {Каталог.Множина(view.Segments, "ui-seg-one", "ui-seg-few", "ui-seg-many")}"
+            : "";
 
         ДописатиШвидкість(view.Speed);
 
@@ -748,7 +751,9 @@ public sealed partial class TaskRow : ObservableObject
             ? $"{Розмір(view.Done)} / {Розмір(total)}"
             : Розмір(view.Done);
 
-        SpeedText = view.Speed > 0 ? $"{Розмір(view.Speed)}/с" : "";
+        SpeedText = view.Speed > 0
+            ? Розмір(view.Speed) + Каталог.T("ui-per-sec")
+            : "";
 
         EtaText = view.EtaSecs is { } eta && eta > 0 ? Час(eta) : "";
     }
@@ -773,7 +778,9 @@ public sealed partial class TaskRow : ObservableObject
             пік = Math.Max(пік, v);
         }
 
-        PeakText = пік > 0 ? $"пік {Розмір((ulong)пік)}/с" : "";
+        PeakText = пік > 0
+            ? Каталог.T("ui-peak", ("speed", Розмір((ulong)пік) + Каталог.T("ui-per-sec")))
+            : "";
     }
 
     /// <summary>Покласти нову розкладку частин.</summary>
@@ -796,17 +803,21 @@ public sealed partial class TaskRow : ObservableObject
     /// <summary>Стан людською мовою, а не кодом протоколу.</summary>
     private static string ЛюдськийСтан(string raw) => raw switch
     {
-        "queued" => "у черзі",
-        "running" => "качається",
-        "paused" => "зупинено",
-        "done" => "готово",
-        "failed" => "помилка",
+        "queued" => Каталог.T("ui-st-queued"),
+        "running" => Каталог.T("ui-st-running"),
+        "paused" => Каталог.T("ui-st-paused"),
+        "done" => Каталог.T("ui-st-done"),
+        "failed" => Каталог.T("ui-st-failed"),
         var інше => інше,
     };
 
     private static string Розмір(ulong bytes)
     {
-        string[] одиниці = ["Б", "КБ", "МБ", "ГБ", "ТБ"];
+        string[] одиниці =
+        [
+            Каталог.T("ui-b"), Каталог.T("ui-kb"), Каталог.T("ui-mb"),
+            Каталог.T("ui-gb"), Каталог.T("ui-tb"),
+        ];
         double value = bytes;
         int unit = 0;
 
@@ -821,8 +832,8 @@ public sealed partial class TaskRow : ObservableObject
 
     private static string Час(ulong secs) => secs switch
     {
-        < 60 => $"{secs} с",
-        < 3600 => $"{secs / 60} хв",
-        _ => $"{secs / 3600} год {secs % 3600 / 60} хв",
+        < 60 => $"{secs} {Каталог.T("ui-sec")}",
+        < 3600 => $"{secs / 60} {Каталог.T("ui-min")}",
+        _ => $"{secs / 3600} {Каталог.T("ui-hour")} {secs % 3600 / 60} {Каталог.T("ui-min")}",
     };
 }

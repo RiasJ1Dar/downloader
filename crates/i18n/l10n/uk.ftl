@@ -52,3 +52,71 @@ set-quiet = нічний ліміт
 set-applied = налаштування записано в ядро
 kb = КБ
 ytdlp-updated = yt-dlp оновлено
+
+# ── Вікно (Ф9) ───────────────────────────────────────────────────────────
+ui-paste-url = Вставте посилання
+ui-clipboard = Буфер
+ui-download = Завантажити
+ui-empty = Тут будуть завантаження. Вставте посилання вище.
+ui-pause = Зупинити
+ui-resume = Продовжити
+ui-reveal = Показати у Провіднику
+ui-remove = Прибрати зі списку (файл лишається)
+ui-speed-window = Швидкість, останні 30 с
+ui-peak = пік { $speed }
+ui-theme-dark = темна
+ui-theme-light = світла
+ui-concurrent = Одночасних
+ui-kbps = КБ/с
+ui-apply = Застосувати
+ui-after-queue = Після черги
+ui-after-nothing = нічого
+ui-after-sleep = сон
+ui-after-shutdown = вимкнути ПК
+ui-schedule = Розклад
+ui-night-kbps = Ніч КБ/с
+ui-dash = –
+
+# Стан завдання людською мовою, а не кодом протоколу
+ui-st-queued = у черзі
+ui-st-running = качається
+ui-st-paused = зупинено
+ui-st-done = готово
+ui-st-failed = помилка
+
+# Рядок стану
+ui-connecting = під'єднуюсь до ядра…
+ui-connected = з'єднано з ядром
+ui-core-missing = ядро не запущене — запустіть downloader-core
+ui-link-lost = зв'язок із ядром обірвався: { $message }
+ui-finished = готово: { $path }
+ui-task-accepted = завдання { $id } прийнято
+ui-core-refused = ядро відмовило без пояснення
+ui-apply-failed = не вдалося застосувати
+ui-pause-failed = не вдалося зупинити
+ui-resume-failed = не вдалося продовжити
+ui-remove-failed = не вдалося прибрати
+ui-path-unknown = шлях файла невідомий
+ui-open-failed = не відкрити теку: { $message }
+ui-clipboard-unavailable = буфер недоступний
+ui-clipboard-error = буфер: { $message }
+ui-clipboard-empty = у буфері немає тексту
+ui-clipboard-nolink = у буфері немає http-посилання — рядок підставлено
+
+# Одиниці. Розмір і час збирає вікно, тому форми потрібні йому, не ядру.
+ui-b = Б
+ui-kb = КБ
+ui-mb = МБ
+ui-gb = ГБ
+ui-tb = ТБ
+ui-per-sec = /с
+ui-sec = с
+ui-min = хв
+ui-hour = год
+
+# Три форми множини: «1 сегмент», «2 сегменти», «5 сегментів»
+ui-seg-one = сегмент
+ui-seg-few = сегменти
+ui-seg-many = сегментів
+ui-core-closed-handshake = ядро закрило з'єднання під час рукостискання
+ui-core-closed-reply = ядро закрило з'єднання, не відповівши

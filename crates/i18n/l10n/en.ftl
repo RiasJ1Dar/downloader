@@ -52,3 +52,71 @@ set-quiet = night rate
 set-applied = settings saved in the core
 kb = KB
 ytdlp-updated = yt-dlp updated
+
+# ── Window (Ф9) ──────────────────────────────────────────────────────────
+ui-paste-url = Paste a link
+ui-clipboard = Clipboard
+ui-download = Download
+ui-empty = Downloads will appear here. Paste a link above.
+ui-pause = Pause
+ui-resume = Resume
+ui-reveal = Show in Explorer
+ui-remove = Remove from list (file stays)
+ui-speed-window = Speed, last 30 s
+ui-peak = peak { $speed }
+ui-theme-dark = dark
+ui-theme-light = light
+ui-concurrent = Concurrent
+ui-kbps = KB/s
+ui-apply = Apply
+ui-after-queue = After queue
+ui-after-nothing = nothing
+ui-after-sleep = sleep
+ui-after-shutdown = shut down
+ui-schedule = Schedule
+ui-night-kbps = Night KB/s
+ui-dash = –
+
+# Task state in plain words, not a protocol code
+ui-st-queued = queued
+ui-st-running = downloading
+ui-st-paused = paused
+ui-st-done = done
+ui-st-failed = failed
+
+# Status line
+ui-connecting = connecting to the core…
+ui-connected = connected to the core
+ui-core-missing = the core is not running — start downloader-core
+ui-link-lost = lost the link to the core: { $message }
+ui-finished = done: { $path }
+ui-task-accepted = task { $id } accepted
+ui-core-refused = the core refused without an explanation
+ui-apply-failed = could not apply
+ui-pause-failed = could not pause
+ui-resume-failed = could not resume
+ui-remove-failed = could not remove
+ui-path-unknown = the file path is unknown
+ui-open-failed = could not open the folder: { $message }
+ui-clipboard-unavailable = the clipboard is unavailable
+ui-clipboard-error = clipboard: { $message }
+ui-clipboard-empty = the clipboard holds no text
+ui-clipboard-nolink = no http link in the clipboard — inserted as text
+
+# Units. The window builds sizes and times, so it needs the forms, not the core.
+ui-b = B
+ui-kb = KB
+ui-mb = MB
+ui-gb = GB
+ui-tb = TB
+ui-per-sec = /s
+ui-sec = s
+ui-min = min
+ui-hour = h
+
+# Three plural forms; English collapses two of them
+ui-seg-one = segment
+ui-seg-few = segments
+ui-seg-many = segments
+ui-core-closed-handshake = the core closed the connection during the handshake
+ui-core-closed-reply = the core closed the connection without answering

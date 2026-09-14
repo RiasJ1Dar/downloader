@@ -207,6 +207,57 @@ mod tests {
         assert_eq!(обрати_мову(None, Some("en-US")), Lang::En);
     }
 
+    /// Ключі обох каталогів, у порядку появи.
+    fn ключі(джерело: &str) -> Vec<&str> {
+        джерело
+            .lines()
+            .map(str::trim_start)
+            .filter(|ln| !ln.is_empty() && !ln.starts_with('#'))
+            // Продовження багаторядкового значення власного ключа не має.
+            .filter_map(|ln| ln.split_once('=').map(|(k, _)| k.trim()))
+            .filter(|k| !k.contains(' '))
+            .collect()
+    }
+
+    /// ⚠️ Каталоги мусять збігатися ключ у ключ.
+    ///
+    /// Без цієї перевірки розходження не видно ніяк: англійський інтерфейс
+    /// просто показує український рядок із запасного каталогу — і виглядає
+    /// це як «переклад ще не дійшов», а не як помилка. Дізнаються про неї
+    /// від користувача, не від збірки.
+    #[test]
+    fn каталоги_збігаються_ключами() {
+        let uk: std::collections::BTreeSet<_> = ключі(UK_FTL).into_iter().collect();
+        let en: std::collections::BTreeSet<_> = ключі(EN_FTL).into_iter().collect();
+
+        let лише_uk: Vec<_> = uk.difference(&en).copied().collect();
+        let лише_en: Vec<_> = en.difference(&uk).copied().collect();
+
+        assert!(
+            лише_uk.is_empty(),
+            "є лише в uk.ftl, англійською покажеться український текст: {лише_uk:?}"
+        );
+        assert!(
+            лише_en.is_empty(),
+            "є лише в en.ftl — українською такого рядка немає взагалі: {лише_en:?}"
+        );
+        assert!(uk.len() > 50, "каталог підозріло малий: {} ключів", uk.len());
+    }
+
+    /// Двічі оголошений ключ — тихо перемагає останній.
+    #[test]
+    fn у_каталозі_немає_повторів() {
+        for (мова, джерело) in [("uk", UK_FTL), ("en", EN_FTL)] {
+            let усі = ключі(джерело);
+            let унікальні: std::collections::BTreeSet<_> = усі.iter().copied().collect();
+            assert_eq!(
+                усі.len(),
+                унікальні.len(),
+                "{мова}.ftl: ключ оголошено двічі, діє лише останній"
+            );
+        }
+    }
+
     #[test]
     fn немає_файла_ru() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");

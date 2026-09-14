@@ -6,6 +6,17 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
   </PropertyGroup>
 
+  <!--
+    Каталоги перекладів беремо просто з теки ядра: один каталог на весь
+    продукт, без копії в apps/ui. `LogicalName` прибирає шлях, щоб ресурс
+    звався `uk.ftl`, а не `_._._crates_i18n_l10n_uk.ftl`.
+  -->
+  <ItemGroup>
+    <EmbeddedResource Include="..\..\crates\i18n\l10n\*.ftl">
+      <LogicalName>%(Filename)%(Extension)</LogicalName>
+    </EmbeddedResource>
+  </ItemGroup>
+
   <ItemGroup>
     <PackageReference Include="Avalonia" Version="12.1.2" />
     <PackageReference Include="Avalonia.Desktop" Version="12.1.2" />
