@@ -4,7 +4,8 @@
 
 ![Архітектура](docs/architecture.png)
 
-Інтерактивна схема: [docs/architecture.html](docs/architecture.html). Кнопки переглядача — англійською. Джерело — Archify JSON у `docs/architecture.json`.
+Інтерактивна схема — завантаж [`docs/architecture.html`](docs/architecture.html) і відкрий у браузері.
+На GitHub клік по HTML показує код, не сторінку (репозиторій приватний). Джерело — `docs/architecture.json`.
 
 ## Де що
 
