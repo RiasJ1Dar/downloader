@@ -267,7 +267,7 @@ impl Protocol for YtdlpProtocol {
 
         // Без `-f` yt-dlp бере найкраще, що знайде, — і вибір людини не
         // мав би жодного значення.
-        let формат = селектор(ctx.variant.as_deref(), є_ffmpeg());
+        let формат = селектор(ctx.variant.as_deref(), downloader_ffmpeg::є());
 
         let mut аргументи: Vec<String> = vec![
             "--no-progress".to_owned(),
@@ -277,7 +277,7 @@ impl Protocol for YtdlpProtocol {
 
         // yt-dlp сам шукає ffmpeg у PATH, а наш лежить поруч із програмою й
         // у PATH не потрапляє: інсталятор ставить його в теку користувача.
-        if let Some(ffmpeg) = шлях_ffmpeg()
+        if let Some(ffmpeg) = downloader_ffmpeg::знайти()
             && let Some(тека) = ffmpeg.parent()
         {
             аргументи.push("--ffmpeg-location".to_owned());
@@ -365,7 +365,7 @@ impl Protocol for YtdlpProtocol {
 fn пояснити_невдачу(stderr: &str) -> Error {
     let чисто = обрізати_секрети(stderr);
 
-    if чисто.contains("Requested format is not available") && !є_ffmpeg() {
+    if чисто.contains("Requested format is not available") && !downloader_ffmpeg::є() {
         return Error::Store(
             "потрібен ffmpeg: це джерело роздає відео й звук окремими доріжками, а звести їх в один файл більше нічим"
                 .to_owned(),
@@ -373,42 +373,6 @@ fn пояснити_невдачу(stderr: &str) -> Error {
     }
 
     Error::Store(format!("yt-dlp впав: {чисто}"))
-}
-
-/// Чи є ffmpeg, яким yt-dlp зводить відео зі звуком.
-///
-/// ⚠️ Для YouTube це не зручність, а умова роботи: сучасні відео роздаються
-/// **роздільно** — доріжка відео окремо, доріжка звуку окремо, і навіть
-/// 144p не існує у вигляді одного файла. Без ffmpeg качання закінчується
-/// двома уламками замість відео.
-fn є_ffmpeg() -> bool {
-    шлях_ffmpeg().is_some()
-}
-
-/// Де лежить ffmpeg: поруч із програмою чи в PATH.
-///
-/// Спершу дивимось поруч — інсталятор кладе ffmpeg у ту саму теку, і саме
-/// його ми знаємо в обличчя: це LGPL-збірка потрібної версії. Чужий ffmpeg
-/// із PATH може виявитись будь-чим, тож він другий у черзі, а не перший.
-fn шлях_ffmpeg() -> Option<PathBuf> {
-    let поруч = std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(|d| d.join(ffmpeg_імʼя())));
-
-    if let Some(p) = поруч
-        && p.is_file()
-    {
-        return Some(p);
-    }
-
-    let path = std::env::var_os("PATH")?;
-    std::env::split_paths(&path)
-        .map(|d| d.join(ffmpeg_імʼя()))
-        .find(|p| p.is_file())
-}
-
-fn ffmpeg_імʼя() -> &'static str {
-    if cfg!(windows) { "ffmpeg.exe" } else { "ffmpeg" }
 }
 
 /// Чи справді з'явився файл, якого ми просили.

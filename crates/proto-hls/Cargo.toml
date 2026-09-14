@@ -8,6 +8,7 @@ license.workspace = true
 
 [dependencies]
 downloader-core.workspace = true
+downloader-ffmpeg.workspace = true
 downloader-proto-http.workspace = true
 async-trait.workspace = true
 reqwest.workspace = true

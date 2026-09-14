@@ -720,6 +720,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "downloader-ffmpeg"
+version = "0.1.0"
+dependencies = [
+ "downloader-core",
+ "thiserror 2.0.20",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "downloader-i18n"
 version = "0.1.0"
 dependencies = [
@@ -762,6 +772,7 @@ dependencies = [
  "async-trait",
  "dash-mpd",
  "downloader-core",
+ "downloader-ffmpeg",
  "downloader-proto-http",
  "downloader-testserver",
  "reqwest",
@@ -793,6 +804,7 @@ dependencies = [
  "bytes",
  "cbc",
  "downloader-core",
+ "downloader-ffmpeg",
  "downloader-proto-http",
  "downloader-testserver",
  "hex",
@@ -827,6 +839,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "downloader-core",
+ "downloader-ffmpeg",
  "serde_json",
  "tokio",
  "tracing",

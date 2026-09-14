@@ -8,6 +8,7 @@ members = [
     "crates/proto-dash",
     "crates/proto-external",
     "crates/proto-ytdlp",
+    "crates/ffmpeg",
     "crates/winutil",
     "crates/i18n",
     "crates/testserver",
@@ -31,6 +32,7 @@ downloader-proto-hls = { path = "crates/proto-hls" }
 downloader-proto-dash = { path = "crates/proto-dash" }
 downloader-proto-external = { path = "crates/proto-external" }
 downloader-proto-ytdlp = { path = "crates/proto-ytdlp" }
+downloader-ffmpeg = { path = "crates/ffmpeg" }
 downloader-winutil = { path = "crates/winutil" }
 downloader-ipc = { path = "crates/ipc" }
 downloader-i18n = { path = "crates/i18n" }

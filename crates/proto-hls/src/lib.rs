@@ -16,6 +16,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use downloader_core::error::{Error, Result};
 use downloader_core::protocol::{
+    Variant,
     Cancel, PlannedFile, Probed, Progress, ProgressSink, Protocol, RateLimitSupport,
     ResumeBlob, RunContext, Session,
 };
@@ -91,7 +92,7 @@ impl Protocol for HlsProtocol {
                     resumable: false,
                     fingerprint: Some("hls-master".to_owned()),
                     files,
-                    variants: Vec::new(),
+                    variants: якості(&варіанти),
                 })
             }
             Маніфест::Media(m) => {
@@ -116,7 +117,80 @@ impl Protocol for HlsProtocol {
         }
     }
 
+    /// Проба з урахуванням обраної якості.
+    ///
+    /// Відрізняється від звичайної лише тим, **який файл позначено
+    /// обраним**: людина попросила 360p — нехай і файл зветься `360p.ts`,
+    /// а не `1080p.ts`, як вийшло б за замовчуванням.
+    async fn probe_variant(&self, source: &str, variant: Option<&str>) -> Result<Probed> {
+        let mut probed = self.probe(source).await?;
+
+        let Some(id) = variant else {
+            return Ok(probed);
+        };
+
+        // Доріжки (аудіо, субтитри) не чіпаємо: вони не змагаються з відео,
+        // а йдуть на додачу до нього.
+        let є_такий = probed
+            .files
+            .iter()
+            .any(|f| f.suggested_name == id && !це_імʼя_доріжки(Path::new(&f.suggested_name)));
+
+        if !є_такий {
+            // Маніфест міг змінитись між пробою і вибором. Падати тут не
+            // можна: краще качати те, що є, ніж не качати нічого.
+            return Ok(probed);
+        }
+
+        for f in &mut probed.files {
+            if !це_імʼя_доріжки(Path::new(&f.suggested_name)) {
+                f.selected = f.suggested_name == id;
+            }
+        }
+
+        Ok(probed)
+    }
+
     async fn run(&self, ctx: RunContext, sink: &dyn ProgressSink) -> Result<Option<ResumeBlob>> {
+        let відео = ctx
+            .targets
+            .iter()
+            .find(|p| !це_імʼя_доріжки(p))
+            .cloned();
+
+        let наслідок = self.тягнути(ctx, sink).await?;
+
+        // ⚠️ Лише коли завдання **завершене**. Непорожній наслідок означає
+        // «зупинено на прохання»: файл ще недописаний, і міняти контейнер
+        // на півдорозі — гарантовано зіпсувати те, що вже є.
+        if наслідок.is_none()
+            && let Some(dest) = відео
+        {
+            перекласти_контейнер(&dest).await;
+        }
+
+        Ok(наслідок)
+    }
+
+    fn set_rate_limit(&self, bytes_per_sec: u64) -> RateLimitSupport {
+        match self.rate_limit.lock() {
+            Ok(mut g) => {
+                *g = bytes_per_sec;
+                RateLimitSupport::Applied
+            }
+            Err(_) => RateLimitSupport::Unsupported,
+        }
+    }
+    fn set_session(&self, session: Session) {
+        match self.session.lock() {
+            Ok(mut g) => *g = session,
+            Err(_) => tracing::error!("сесія HLS отруєна, cookie не застосовано"),
+        }
+    }
+}
+
+impl HlsProtocol {
+    async fn тягнути(&self, ctx: RunContext, sink: &dyn ProgressSink) -> Result<Option<ResumeBlob>> {
         if ctx.targets.is_empty() {
             return Err(Error::Store(
                 "ядро не дало жодного шляху для запису".to_owned(),
@@ -165,7 +239,8 @@ impl Protocol for HlsProtocol {
             Маніфест::Master { mut варіанти } => {
                 варіанти.sort_by_key(|v| v.bandwidth);
                 if let Some(dest) = video_dest {
-                    let обраний = обрати_варіант(&варіанти, dest)?;
+                    let обраний = за_вибором(&варіанти, ctx.variant.as_deref())
+                        .map_or_else(|| обрати_варіант(&варіанти, dest), Ok)?;
                     let media_txt = fetch_text(&self.client, &обраний.uri, &session).await?;
                     match розібрати(media_txt.as_bytes(), &обраний.uri)? {
                         Маніфест::Media(m) => {
@@ -224,24 +299,8 @@ impl Protocol for HlsProtocol {
         )
         .await
     }
-
-    fn set_rate_limit(&self, bytes_per_sec: u64) -> RateLimitSupport {
-        match self.rate_limit.lock() {
-            Ok(mut g) => {
-                *g = bytes_per_sec;
-                RateLimitSupport::Applied
-            }
-            Err(_) => RateLimitSupport::Unsupported,
-        }
-    }
-
-    fn set_session(&self, session: Session) {
-        match self.session.lock() {
-            Ok(mut g) => *g = session,
-            Err(_) => tracing::error!("сесія HLS отруєна, cookie не застосовано"),
-        }
-    }
 }
+
 
 impl HlsProtocol {
     /// Live: забирати сегменти з ковзного вікна, поки не з'явиться ENDLIST
@@ -491,6 +550,101 @@ async fn розібрати_медіа(
 }
 
 /// Якість з master: ім'я цілі (`360p.ts`, `360p (1).ts`) або найширший.
+/// Перекласти склеєний потік у контейнер, який просила людина.
+///
+/// HLS склеюється в `.ts` — це його природний вигляд. Але коли в цілі
+/// стоїть `.mp4`, людина просила саме mp4: він перемотується, відкривається
+/// будь-де і не дивує програвачі. Дані при цьому не чіпаються — міняється
+/// лише обгортка.
+///
+/// ⚠️ Помилку тут **не піднімаємо**. Файл уже завантажений, і завалити
+/// завдання на останньому кроці означало б викинути всю роботу через
+/// косметику. Кажемо в журнал і лишаємо як є.
+async fn перекласти_контейнер(dest: &Path) {
+    let треба = dest
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| !e.eq_ignore_ascii_case("ts"));
+
+    if !треба || !dest.is_file() {
+        return;
+    }
+
+    if !downloader_ffmpeg::є() {
+        tracing::warn!(
+            "у {} лишився потік MPEG-TS: ffmpeg немає, міняти контейнер нічим",
+            dest.display()
+        );
+        return;
+    }
+
+    let тимчасовий = dest.with_extension("hls.ts");
+    if let Err(e) = std::fs::rename(dest, &тимчасовий) {
+        tracing::warn!("не відкласти потік перед зміною контейнера: {e}");
+        return;
+    }
+
+    match downloader_ffmpeg::змінити_контейнер(&тимчасовий, dest).await {
+        Ok(()) => {
+            if let Err(e) = std::fs::remove_file(&тимчасовий) {
+                tracing::warn!("не прибрати {}: {e}", тимчасовий.display());
+            }
+        }
+        Err(e) => {
+            tracing::warn!("контейнер лишається MPEG-TS: {e}");
+            // Повертаємо як було: краще працездатний `.ts` під іншим
+            // розширенням, ніж порожнє місце.
+            if let Err(e) = std::fs::rename(&тимчасовий, dest) {
+                tracing::error!("не повернути потік на місце: {e}");
+            }
+        }
+    }
+}
+
+/// Варіанти якості з master playlist — у вигляді, зрозумілому ядру.
+///
+/// ⚠️ Ідентифікатором беремо **те саме ім'я, яким модуль називає файл**
+/// (`720p.ts`). Одна річ — одна назва: інакше довелося б тримати ще одну
+/// відповідність «варіант ↔ файл» і стежити, щоб вона не розійшлася.
+/// Для ядра рядок лишається непрозорим, як і належить.
+///
+/// Висота може бути відсутня (`RESOLUTION` — необов'язковий атрибут), тоді
+/// людині лишається бітрейт — це чесніше, ніж вигадати висоту.
+fn якості(варіанти: &[Варіант]) -> Vec<Variant> {
+    варіанти
+        .iter()
+        .rev()
+        .map(|v| Variant {
+            id: імʼя_варіанту(v.height, v.bandwidth),
+            label: match v.height {
+                Some(h) => format!("{h}p"),
+                None => мегабіти(v.bandwidth),
+            },
+            height: v.height.and_then(|h| u32::try_from(h).ok()),
+            // Скільки важитиме — невідомо: у master немає тривалості, а
+            // бітрейт без неї нічого не дає.
+            size: None,
+            note: v.height.map(|_| мегабіти(v.bandwidth)),
+        })
+        .collect()
+}
+
+fn мегабіти(bandwidth: u64) -> String {
+    format!("{:.1} Мбіт/с", bandwidth as f64 / 1_000_000.0)
+}
+
+/// Варіант за явним вибором людини.
+///
+/// `None` означає «вибору не було» — тоді працює давня здогадка за іменем
+/// файла. Невідомий id теж дає `None`: маніфест міг змінитись між пробою і
+/// качанням, і в такому разі краще взяти щось робоче, ніж упасти.
+fn за_вибором<'a>(варіанти: &'a [Варіант], вибір: Option<&str>) -> Option<&'a Варіант> {
+    let id = вибір?;
+    варіанти
+        .iter()
+        .find(|v| імʼя_варіанту(v.height, v.bandwidth) == id)
+}
+
 fn обрати_варіант<'a>(варіанти: &'a [Варіант], dest: &Path) -> Result<&'a Варіант> {
     let fallback = варіанти.last().ok_or_else(|| {
         Error::Store("master playlist без варіантів".to_owned())
@@ -787,6 +941,104 @@ mod tests {
     use downloader_core::protocol::Cancel;
     use downloader_testserver::EvilServer;
     use sha2::{Digest, Sha256};
+
+    /// Майстер-плейлист із трьома якостями, одна без RESOLUTION.
+    fn майстер() -> Vec<Варіант> {
+        vec![
+            Варіант { uri: "low.m3u8".to_owned(), bandwidth: 400_000, width: Some(640), height: Some(360) },
+            Варіант { uri: "mid.m3u8".to_owned(), bandwidth: 1_500_000, width: Some(1280), height: Some(720) },
+            Варіант { uri: "audio-only.m3u8".to_owned(), bandwidth: 96_000, width: None, height: None },
+        ]
+    }
+
+    /// ⚠️ Запобіжник проти мовчазної втрати методів трейта.
+    ///
+    /// `Protocol` має типові реалізації для `set_rate_limit` і `set_session`,
+    /// тож варто цим методам випасти з `impl Protocol` у звичайний `impl` —
+    /// і компілятор промовчить, а ліміт швидкості з cookies просто
+    /// перестануть діяти. Я саме так і зробив під час перебудови модуля;
+    /// помітив лише за побічним попередженням clippy.
+    #[test]
+    fn ліміт_і_сесія_доступні_через_трейт() {
+        let Ok(p) = HlsProtocol::new() else {
+            // Клієнт не створився — перевіряти нічого, і це не про трейт.
+            return;
+        };
+        let через_трейт: &dyn Protocol = &p;
+
+        assert!(
+            matches!(
+                через_трейт.set_rate_limit(1024),
+                RateLimitSupport::Applied
+            ),
+            "HLS уміє обмежувати швидкість — отже метод має бути в трейті"
+        );
+
+        // Сесія: якщо метод випав із трейта, cookie просто не доїде.
+        через_трейт.set_session(Session::from_parts(Some("a=1".to_owned()), None));
+        let збережено = p.session.lock().map(|g| g.cookies.clone()).unwrap_or(None);
+        assert_eq!(збережено.as_deref(), Some("a=1"));
+    }
+
+    #[test]
+    fn найкраща_якість_перша() {
+        let mut варіанти = майстер();
+        варіанти.sort_by_key(|v| v.bandwidth);
+
+        let перелік = якості(&варіанти);
+        let висоти: Vec<Option<u32>> = перелік.iter().map(|v| v.height).collect();
+
+        assert_eq!(
+            висоти,
+            vec![Some(720), Some(360), None],
+            "перелік має йти від найкращої якості до найгіршої"
+        );
+    }
+
+    /// ⚠️ `RESOLUTION` у HLS необов'язковий. Вигадати висоту не можна —
+    /// лишається бітрейт, і це чесніше за вигадку.
+    #[test]
+    fn варіант_без_роздільності_показує_бітрейт() {
+        let варіанти = майстер();
+        let перелік = якості(&варіанти);
+
+        let без_висоти = перелік.iter().find(|v| v.height.is_none());
+        assert!(без_висоти.is_some(), "у зразку є варіант без RESOLUTION");
+        let Some(без_висоти) = без_висоти else { return };
+
+        assert!(
+            без_висоти.label.contains("Мбіт/с"),
+            "підпис має назвати бітрейт: {}",
+            без_висоти.label
+        );
+    }
+
+    /// Ідентифікатор варіанта — те саме ім'я, яким модуль назве файл.
+    /// Якби вони розійшлися, вибір людини не знайшов би свого варіанта.
+    #[test]
+    fn вибір_знаходить_свій_варіант() {
+        let варіанти = майстер();
+        let перелік = якості(&варіанти);
+
+        for v in &перелік {
+            let знайдений = за_вибором(&варіанти, Some(&v.id));
+            assert!(знайдений.is_some(), "варіант {} загубився", v.id);
+
+            if let Some(з) = знайдений {
+                assert_eq!(
+                    імʼя_варіанту(з.height, з.bandwidth),
+                    v.id,
+                    "id мусить збігатися з іменем файла"
+                );
+            }
+        }
+
+        assert!(
+            за_вибором(&варіанти, Some("вигадка.ts")).is_none(),
+            "невідомий вибір не має ні на що вказувати"
+        );
+        assert!(за_вибором(&варіанти, None).is_none(), "без вибору — нічого");
+    }
 
     struct Німий;
 

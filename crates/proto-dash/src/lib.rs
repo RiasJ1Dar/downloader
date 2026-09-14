@@ -13,6 +13,7 @@ use async_trait::async_trait;
 use dash_mpd::{AdaptationSet, Period, Representation, SegmentList};
 use downloader_core::error::{Error, Result};
 use downloader_core::protocol::{
+    Variant,
     Cancel, PlannedFile, Probed, Progress, ProgressSink, Protocol, RateLimitSupport,
     ResumeBlob, RunContext, Session,
 };
@@ -74,8 +75,32 @@ impl Protocol for DashProtocol {
             resumable: false,
             fingerprint: Some("dash-vod".to_owned()),
             files,
-            variants: Vec::new(),
+            variants: варіанти(&якості),
         })
+    }
+
+    /// Проба з урахуванням обраної якості.
+    ///
+    /// Різниця з звичайною одна: обраним лишається саме той файл, який
+    /// людина вибрала, а не найширший за бітрейтом.
+    async fn probe_variant(&self, source: &str, variant: Option<&str>) -> Result<Probed> {
+        let mut probed = self.probe(source).await?;
+
+        let Some(id) = variant else {
+            return Ok(probed);
+        };
+
+        if !probed.files.iter().any(|f| f.suggested_name == id) {
+            // MPD міг змінитись між пробою і вибором: краще качати те, що
+            // є, ніж не качати нічого.
+            return Ok(probed);
+        }
+
+        for f in &mut probed.files {
+            f.selected = f.suggested_name == id;
+        }
+
+        Ok(probed)
     }
 
     async fn run(&self, ctx: RunContext, sink: &dyn ProgressSink) -> Result<Option<ResumeBlob>> {
@@ -84,14 +109,68 @@ impl Protocol for DashProtocol {
         })?;
         let session = self.поточна_сесія(Some(&ctx.session));
         let якості = self.розібрати_джерело(&ctx.source, Some(&session)).await?;
-        let обрана = обрати_якість(&якості, dest)?;
+        let обрана = за_вибором(&якості, ctx.variant.as_deref())
+            .map_or_else(|| обрати_якість(&якості, dest), Ok)?;
         if обрана.сегменти.is_empty() {
             return Err(Error::Store(
                 "обрана representation без сегментів".to_owned(),
             ));
         }
-        self.тягнути_сегменти(&обрана.сегменти, dest, sink, &ctx.cancel, &session)
+        // Найкращий звук окремою доріжкою. У DASH це звичайна річ: відео й
+        // звук — різні Representation, і без зведення людина отримала б
+        // німе відео, навіть не зрозумівши чому.
+        let звук = якості
+            .iter()
+            .filter(|я| я.звук && !я.сегменти.is_empty())
+            .max_by_key(|я| я.bandwidth);
+
+        let (Some(звук), false) = (звук, обрана.звук) else {
+            // Звуку окремо немає, або людина свідомо обрала саму доріжку
+            // звуку — качаємо як просили.
+            return self
+                .тягнути_сегменти(&обрана.сегменти, dest, sink, &ctx.cancel, &session)
+                .await;
+        };
+
+        if !downloader_ffmpeg::є() {
+            // ⚠️ Мовчати тут не можна: людина отримає відео без звуку й
+            // вважатиме це дефектом джерела.
+            tracing::warn!(
+                "звук лишається окремо: ffmpeg немає, зводити нічим —                  поставте його командою `dl ffmpeg-install`"
+            );
+            return self
+                .тягнути_сегменти(&обрана.сегменти, dest, sink, &ctx.cancel, &session)
+                .await;
+        }
+
+        let відео_файл = dest.with_extension("video.part");
+        let звук_файл = dest.with_extension("audio.part");
+
+        if let Some(blob) = self
+            .тягнути_сегменти(&обрана.сегменти, &відео_файл, sink, &ctx.cancel, &session)
+            .await?
+        {
+            return Ok(Some(blob));
+        }
+
+        if let Some(blob) = self
+            .тягнути_сегменти(&звук.сегменти, &звук_файл, sink, &ctx.cancel, &session)
+            .await?
+        {
+            return Ok(Some(blob));
+        }
+
+        downloader_ffmpeg::звести(&відео_файл, &звук_файл, dest)
             .await
+            .map_err(|e| Error::Store(format!("не звести відео зі звуком: {e}")))?;
+
+        for тимчасовий in [&відео_файл, &звук_файл] {
+            if let Err(e) = std::fs::remove_file(тимчасовий) {
+                tracing::warn!("не прибрати {}: {e}", тимчасовий.display());
+            }
+        }
+
+        Ok(None)
     }
 
     fn set_rate_limit(&self, bytes_per_sec: u64) -> RateLimitSupport {
@@ -173,6 +252,14 @@ impl DashProtocol {
 struct Якість {
     name: String,
     bandwidth: u64,
+    /// Висота кадру, якщо MPD її називає. Потрібна переліку якостей.
+    height: Option<u64>,
+    /// Це доріжка звуку, а не відео.
+    ///
+    /// ⚠️ DASH роздає їх окремими Representation, і без цієї ознаки звук
+    /// опинявся в переліку якостей нарівні з відео — людина обирала «0.1
+    /// Мбіт/с» і отримувала файл без зображення.
+    звук: bool,
     сегменти: Vec<String>,
 }
 
@@ -208,7 +295,13 @@ fn розібрати_mpd(xml: &str, source: &str) -> Result<Vec<Якість>> 
                     .to_owned(),
             ));
         }
-        return Err(Error::Store("MPD без representation із сегментами".to_owned()));
+        // ⚠️ Найчастіша причина — SegmentTemplate. Помилка мусить її назвати:
+        // «без representation із сегментами» звучить як зіпсований маніфест,
+        // хоч насправді маніфест цілком справний, а межа — у нас.
+        return Err(Error::Store(
+            "цей MPD описує сегменти через SegmentTemplate, а модуль поки розуміє лише SegmentList"
+                .to_owned(),
+        ));
     }
     if dynamic && якості.iter().all(|я| я.сегменти.is_empty()) {
         return Err(Error::Store(
@@ -269,9 +362,12 @@ fn зібрати_якості(mpd: &dash_mpd::MPD, source: &str) -> Result<Vec<
                 }
                 let bandwidth = rep.bandwidth.unwrap_or(0);
                 let height = rep.height.or(adaptation.height);
+                let звук = це_звук(adaptation, rep);
                 out.push(Якість {
                     name: імʼя_якості(height, bandwidth),
                     bandwidth,
+                    height,
+                    звук,
                     сегменти,
                 });
             }
@@ -321,6 +417,57 @@ fn імʼя_якості(height: Option<u64>, bandwidth: u64) -> String {
 }
 
 /// Якість з dest (`720p.mp4`, `720p (1).mp4`) або найвища.
+/// Чи це доріжка звуку.
+///
+/// Дивимось `contentType`, потім `mimeType` — у різних MPD заповнене то
+/// одне, то інше. Коли не сказано нічого, вважаємо відео: помилитись у
+/// цей бік безпечніше, бо відео без звуку людина принаймні побачить.
+fn це_звук(adaptation: &AdaptationSet, rep: &Representation) -> bool {
+    let тип = adaptation
+        .contentType
+        .as_deref()
+        .or(adaptation.mimeType.as_deref())
+        .or(rep.mimeType.as_deref())
+        .unwrap_or("");
+
+    тип.to_ascii_lowercase().contains("audio")
+}
+
+/// Перелік якостей для людини: від найкращої до найгіршої.
+///
+/// ⚠️ Ідентифікатор — те саме ім'я, яким модуль назве файл (`720p.mp4`).
+/// Одна річ має одну назву: інакше довелося б тримати ще одну відповідність
+/// «якість ↔ файл» і стежити, щоб вона не розійшлася.
+fn варіанти(якості: &[Якість]) -> Vec<Variant> {
+    якості
+        .iter()
+        .rev()
+        .filter(|я| !я.звук)
+        .map(|я| Variant {
+            id: я.name.clone(),
+            label: match я.height {
+                Some(h) => format!("{h}p"),
+                None => мегабіти(я.bandwidth),
+            },
+            height: я.height.and_then(|h| u32::try_from(h).ok()),
+            // MPD знає тривалість, але розмір сегментів — ні; чесніше
+            // промовчати, ніж показати вигадане число.
+            size: None,
+            note: я.height.map(|_| мегабіти(я.bandwidth)),
+        })
+        .collect()
+}
+
+fn мегабіти(bandwidth: u64) -> String {
+    format!("{:.1} Мбіт/с", bandwidth as f64 / 1_000_000.0)
+}
+
+/// Якість за явним вибором людини; `None` — вибору не було.
+fn за_вибором<'a>(якості: &'a [Якість], вибір: Option<&str>) -> Option<&'a Якість> {
+    let id = вибір?;
+    якості.iter().find(|я| я.name == id)
+}
+
 fn обрати_якість<'a>(якості: &'a [Якість], dest: &Path) -> Result<&'a Якість> {
     let fallback = якості.last().ok_or_else(|| {
         Error::Store("MPD без representation".to_owned())
@@ -425,6 +572,54 @@ mod tests {
 
     impl ProgressSink for Німий {
         fn report(&self, _: Progress) {}
+    }
+
+    #[test]
+    fn перелік_якостей_іде_від_найкращої() {
+        let якості = vec![
+            Якість { name: "360p.mp4".to_owned(), bandwidth: 400_000, height: Some(360), звук: false, сегменти: vec![] },
+            Якість { name: "720p.mp4".to_owned(), bandwidth: 1_500_000, height: Some(720), звук: false, сегменти: vec![] },
+            Якість { name: "96000bps.mp4".to_owned(), bandwidth: 96_000, height: None, звук: false, сегменти: vec![] },
+            // Доріжка звуку: у переліку якостей їй не місце.
+            Якість { name: "128000bps.mp4".to_owned(), bandwidth: 128_000, height: None, звук: true, сегменти: vec![] },
+        ];
+
+        // Модуль тримає якості за зростанням бітрейта — перелік має бути навпаки.
+        let mut за_бітрейтом = якості;
+        за_бітрейтом.sort_by_key(|я| я.bandwidth);
+
+        let перелік = варіанти(&за_бітрейтом);
+        assert_eq!(
+            перелік.iter().map(|v| v.height).collect::<Vec<_>>(),
+            vec![Some(720), Some(360), None]
+        );
+
+        // ⚠️ Без RESOLUTION у MPD висоти немає — лишається бітрейт.
+        let останній = перелік.last().map(|v| v.label.clone()).unwrap_or_default();
+        assert!(
+            останній.contains("Мбіт/с"),
+            "варіант без висоти має назвати бітрейт: {останній}"
+        );
+
+        // Ідентифікатор мусить збігатися з іменем файла, інакше вибір людини
+        // не знайде свого варіанта.
+        for v in &перелік {
+            assert!(
+                за_вибором(&за_бітрейтом, Some(&v.id)).is_some(),
+                "варіант {} загубився",
+                v.id
+            );
+        }
+        assert!(за_вибором(&за_бітрейтом, Some("вигадка.mp4")).is_none());
+        assert!(за_вибором(&за_бітрейтом, None).is_none());
+
+        // ⚠️ Доріжка звуку — не «якість відео». Поки вона стояла в переліку
+        // нарівні з відео, людина могла обрати «0.1 Мбіт/с» і отримати файл
+        // без зображення.
+        assert!(
+            !перелік.iter().any(|v| v.id == "128000bps.mp4"),
+            "звук потрапив у перелік якостей: {перелік:?}"
+        );
     }
 
     #[test]
