@@ -67,6 +67,7 @@ async fn dummy_probe_і_run_пишуть_test_на_диск() -> Result<()> {
                 resume: None,
                 cancel: Cancel::new(),
                 session: Session::default(),
+                variant: None,
             },
             &Німий,
         )
@@ -119,6 +120,7 @@ async fn реєстр_знаходить_external_і_не_знає_імен_http
                 resume: None,
                 cancel: Cancel::new(),
                 session: Session::default(),
+                variant: None,
             },
             &Німий,
         )
@@ -142,6 +144,7 @@ async fn падіння_плагіна_несе_код_і_хвіст_stderr() ->
                 resume: None,
                 cancel: Cancel::new(),
                 session: Session::default(),
+                variant: None,
             },
             &Німий,
         )

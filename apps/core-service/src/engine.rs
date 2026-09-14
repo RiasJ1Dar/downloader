@@ -31,7 +31,7 @@ use downloader_core::store::{NewFile, NewTask, Status, Store};
 use downloader_core::{Settings, SettingsPatch};
 
 use crate::after::AfterQueue;
-use downloader_ipc::protocol::{Event, PartView, TaskView};
+use downloader_ipc::protocol::{Event, PartView, TaskView, VariantView};
 use downloader_winutil::{motw, names, paths, вистачить_місця};
 use tokio::sync::broadcast;
 
@@ -64,6 +64,11 @@ struct Live {
     session: Session,
     protocol: String,
     targets: Vec<PathBuf>,
+    /// Обраний варіант якості, як його назвав модуль.
+    ///
+    /// Живе поруч із завданням, бо має пережити паузу: після «продовжити»
+    /// качати треба ту саму якість, а не ту, яку модуль вибере наново.
+    variant: Option<String>,
     /// Розкладка частин — для «вікна сегментів».
     ///
     /// Живе лише в пам'яті й лише для активних завдань: після завершення
@@ -259,6 +264,7 @@ impl Engine {
             });
             loaded.push(Live {
                 id: t.id,
+                variant: t.variant.clone(),
                 url: t.url,
                 name,
                 status,
@@ -378,6 +384,35 @@ impl Engine {
             .unwrap_or_default()
     }
 
+    /// Які варіанти якості пропонує це посилання.
+    ///
+    /// Порожній перелік — вибирати нема з чого, і це нормальний випадок:
+    /// звичайний файл має один вигляд.
+    ///
+    /// ⚠️ Ядро не заглядає в `id` варіанта. Узяло в модуля, віддало клієнту,
+    /// поверне модулю — і не знає, що за ним стоїть. Варто раз розібрати цей
+    /// рядок тут, і обіцянка «новий модуль доточується без правок ядра»
+    /// стане неправдою.
+    pub async fn variants(&self, url: &str) -> anyhow::Result<Vec<VariantView>> {
+        let Some(protocol) = self.registry.find(url) else {
+            anyhow::bail!("не знайшлося модуля для {url}");
+        };
+
+        let probed = protocol.probe(url).await?;
+
+        Ok(probed
+            .variants
+            .into_iter()
+            .map(|v| VariantView {
+                id: v.id,
+                label: v.label,
+                height: v.height,
+                size: v.size,
+                note: v.note,
+            })
+            .collect())
+    }
+
     /// Додати завантаження й одразу почати його.
     pub async fn add(
         self: &Arc<Self>,
@@ -385,6 +420,7 @@ impl Engine {
         dest: Option<PathBuf>,
         _parts: Option<usize>,
         session: Session,
+        variant: Option<String>,
     ) -> anyhow::Result<i64> {
         // Хто це качатиме, вирішує реєстр, а не ядро. Саме тут і живе межа.
         let Some(protocol) = self.registry.find(url) else {
@@ -469,6 +505,7 @@ impl Engine {
                 protocol: protocol_name.clone(),
                 title: None,
                 category_id,
+                variant: variant.clone(),
                 files: planned
                     .iter()
                     .map(|(path, size)| NewFile {
@@ -520,6 +557,7 @@ impl Engine {
                     session: session.clone(),
                     protocol: protocol_name.clone(),
                     targets: targets.clone(),
+                    variant: variant.clone(),
                     parts: Vec::new(),
                 },
             );
@@ -533,6 +571,7 @@ impl Engine {
                 probed.final_url,
                 targets,
                 session,
+                variant,
             );
         } else {
             self.set_status(id, Status::Queued, None);
@@ -554,6 +593,7 @@ impl Engine {
         source: String,
         targets: Vec<PathBuf>,
         session: Session,
+        variant: Option<String>,
     ) {
         tokio::spawn(async move {
             let Some(module) = self.registry.by_name(&protocol) else {
@@ -594,6 +634,7 @@ impl Engine {
                 resume: None,
                 cancel,
                 session,
+                variant,
             };
 
             match module.run(ctx.clone(), &sink).await {
@@ -679,11 +720,12 @@ impl Engine {
                 task.url.clone(),
                 task.targets.clone(),
                 task.session.clone(),
+                task.variant.clone(),
             )
         };
-        let (id, protocol, url, targets, session) = job;
+        let (id, protocol, url, targets, session, variant) = job;
         self.set_status(id, Status::Running, None);
-        self.spawn_download(id, protocol, url, targets, session);
+        self.spawn_download(id, protocol, url, targets, session, variant);
     }
 
     /// Зупинити завдання на прохання людини.
@@ -725,12 +767,15 @@ impl Engine {
             (task.url, task.protocol, targets)
         };
 
-        let session = match self.live.lock() {
+        // Сесія і обраний варіант живуть у пам'яті поруч із завданням:
+        // продовжувати треба ту саму якість, а не ту, яку модуль вибере
+        // наново — інакше половина файла була б 720p, а половина 360p.
+        let (session, variant) = match self.live.lock() {
             Ok(live) => live
                 .get(&id)
-                .map(|t| t.session.clone())
+                .map(|t| (t.session.clone(), t.variant.clone()))
                 .unwrap_or_default(),
-            Err(_) => Session::default(),
+            Err(_) => (Session::default(), None),
         };
 
         let start_now = {
@@ -757,13 +802,14 @@ impl Engine {
             task.protocol = protocol.clone();
             task.targets = targets.clone();
             task.session = session.clone();
+            // Варіант не чіпаємо: продовжувати треба ту саму якість.
             task.url = url.clone();
         }
 
         if start_now {
             self.set_status(id, Status::Running, None);
             self.clone()
-                .spawn_download(id, protocol, url, targets, session);
+                .spawn_download(id, protocol, url, targets, session, variant);
         } else {
             self.set_status(id, Status::Queued, None);
         }
@@ -1123,6 +1169,7 @@ mod tests {
             total: None,
             segments: 0,
             error: None,
+            variant: None,
             prev_done: 0,
             speed: 0,
             session: Session::default(),

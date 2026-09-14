@@ -125,15 +125,24 @@ async fn dispatch(req: Request, engine: &Arc<Engine>) -> Response {
             parts: engine.details(id),
         },
 
+        Request::Variants { url } => match engine.variants(&url).await {
+            Ok(variants) => Response::Variants { variants },
+            Err(e) => Response::Error {
+                code: ErrorCode::Internal,
+                message: e.to_string(),
+            },
+        },
+
         Request::Add {
             url,
             dest,
             parts,
             cookies,
             referer,
+            variant,
         } => {
             let session = downloader_core::protocol::Session::from_parts(cookies, referer);
-            match engine.add(&url, dest.map(Into::into), parts, session).await {
+            match engine.add(&url, dest.map(Into::into), parts, session, variant).await {
                 Ok(id) => Response::Added { id },
                 Err(e) => Response::Error {
                     code: ErrorCode::Internal,

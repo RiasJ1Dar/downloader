@@ -120,3 +120,4 @@ ui-seg-few = segments
 ui-seg-many = segments
 ui-core-closed-handshake = the core closed the connection during the handshake
 ui-core-closed-reply = the core closed the connection without answering
+no-variants = nothing to choose from: this link has a single form

@@ -91,6 +91,7 @@ impl Protocol for HlsProtocol {
                     resumable: false,
                     fingerprint: Some("hls-master".to_owned()),
                     files,
+                    variants: Vec::new(),
                 })
             }
             Маніфест::Media(m) => {
@@ -109,6 +110,7 @@ impl Protocol for HlsProtocol {
                         size: None,
                         selected: true,
                     }],
+                    variants: Vec::new(),
                 })
             }
         }
@@ -823,6 +825,7 @@ mod tests {
                 resume: None,
                 cancel: Cancel::new(),
                 session: Session::default(),
+                variant: None,
             },
             &Німий,
         )
@@ -936,6 +939,7 @@ mod tests {
                 resume: None,
                 cancel: Cancel::new(),
                 session: Session::default(),
+                variant: None,
             },
             &Німий,
         )
@@ -981,6 +985,7 @@ mod tests {
                 resume: None,
                 cancel: Cancel::new(),
                 session: Session::default(),
+                variant: None,
             },
             &Німий,
         )
@@ -1010,6 +1015,7 @@ mod tests {
                 resume: None,
                 cancel: Cancel::new(),
                 session: Session::default(),
+                variant: None,
             },
             &Німий,
         )
@@ -1052,6 +1058,7 @@ mod tests {
                 resume: None,
                 cancel: Cancel::new(),
                 session: Session::default(),
+                variant: None,
             },
             &Німий,
         )
@@ -1081,6 +1088,7 @@ mod tests {
                 resume: None,
                 cancel: Cancel::new(),
                 session: Session::default(),
+                variant: None,
             },
             &Німий,
         )
@@ -1122,6 +1130,7 @@ mod tests {
                 resume: None,
                 cancel: Cancel::new(),
                 session: Session::default(),
+                variant: None,
             },
             &Німий,
         )

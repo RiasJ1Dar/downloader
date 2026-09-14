@@ -115,6 +115,7 @@ impl Protocol for HttpProtocol {
                 selected: true,
             }],
             final_url: info.final_url,
+            variants: Vec::new(),
         })
     }
 
@@ -306,6 +307,7 @@ mod tests {
                 resume: None,
                 cancel: Cancel::new(),
                 session,
+                variant: None,
             },
             &Німий,
         )

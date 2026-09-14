@@ -456,6 +456,7 @@ fn probed_from(source: &str, r: ProbeResult) -> Probed {
                 selected: f.selected,
             })
             .collect(),
+        variants: Vec::new(),
     }
 }
 

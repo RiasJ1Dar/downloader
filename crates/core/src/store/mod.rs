@@ -83,6 +83,8 @@ pub struct Task {
     pub updated_at: i64,
     pub finished_at: Option<i64>,
     pub error: Option<String>,
+    /// Обрана якість, як її назвав модуль. `None` — вибору не було.
+    pub variant: Option<String>,
 }
 
 /// Файл усередині завдання.
@@ -117,6 +119,8 @@ pub struct NewTask {
     pub protocol: String,
     pub title: Option<String>,
     pub category_id: Option<i64>,
+    /// Обрана якість, як її назвав модуль.
+    pub variant: Option<String>,
     /// Файли завдання. Для звичайного HTTP тут рівно один запис.
     pub files: Vec<NewFile>,
 }
@@ -169,14 +173,16 @@ impl Store {
         let tx = self.conn.transaction().map_err(db)?;
 
         tx.execute(
-            "INSERT INTO task (url, protocol, status, title, category_id, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)",
+            "INSERT INTO task
+                (url, protocol, status, title, category_id, variant, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)",
             params![
                 new.url,
                 new.protocol,
                 Status::Queued.as_str(),
                 new.title,
                 new.category_id,
+                new.variant,
                 now
             ],
         )
@@ -209,7 +215,7 @@ impl Store {
         self.conn
             .query_row(
                 "SELECT id, url, protocol, status, title, category_id,
-                        created_at, updated_at, finished_at, error
+                        created_at, updated_at, finished_at, error, variant
                  FROM task WHERE id = ?1",
                 params![id],
                 task_from_row,
@@ -231,7 +237,7 @@ impl Store {
 
     fn tasks_where(&self, status: Option<Status>) -> Result<Vec<Task>> {
         let sql = "SELECT id, url, protocol, status, title, category_id,
-                          created_at, updated_at, finished_at, error
+                          created_at, updated_at, finished_at, error, variant
                    FROM task";
 
         let mut out = Vec::new();
@@ -530,6 +536,7 @@ fn task_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Result<Task>> {
         updated_at: row.get(7).unwrap_or_default(),
         finished_at: row.get(8).unwrap_or_default(),
         error: row.get(9).unwrap_or_default(),
+        variant: row.get(10).unwrap_or_default(),
     }))
 }
 
@@ -562,6 +569,7 @@ mod tests {
             protocol: "http".to_owned(),
             title: None,
             category_id: None,
+            variant: None,
             files: vec![NewFile {
                 path: PathBuf::from(path),
                 size: Some(1000),
@@ -630,6 +638,7 @@ mod tests {
             protocol: "http".to_owned(),
             title: None,
             category_id: None,
+            variant: None,
             files: Vec::new(),
         };
 
@@ -648,6 +657,7 @@ mod tests {
             protocol: "dash".to_owned(),
             title: Some("Фільм".to_owned()),
             category_id: None,
+            variant: None,
             files: vec![
                 NewFile {
                     path: PathBuf::from("video.m4s"),

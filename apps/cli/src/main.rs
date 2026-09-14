@@ -78,6 +78,10 @@ enum Command {
         /// Заголовок Referer.
         #[arg(long)]
         referer: Option<String>,
+
+        /// Варіант якості зі `dl variants <url>`: наприклад `720`.
+        #[arg(long)]
+        variant: Option<String>,
     },
 
     /// Показати, що відомо про посилання, нічого не качаючи.
@@ -121,6 +125,22 @@ enum Command {
 
     /// Показати завдання ядра.
     List,
+
+    /// Які варіанти якості пропонує це посилання.
+    ///
+    /// Проба, не завантаження: нічого не качається, ядро не потрібне.
+    Variants {
+        /// Посилання.
+        url: String,
+
+        /// Cookie-заголовок: `n=v; n2=v2`.
+        #[arg(long)]
+        cookie: Option<String>,
+
+        /// Заголовок Referer.
+        #[arg(long)]
+        referer: Option<String>,
+    },
 
     /// Показати, як завдання поділене на частини.
     ///
@@ -245,6 +265,7 @@ async fn main() -> Result<()> {
                         parts,
                         cookies: session.cookies.clone(),
                         referer: session.referer.clone(),
+                        variant: None,
                     })
                     .await?;
                 match resp {
@@ -292,6 +313,29 @@ async fn main() -> Result<()> {
                 }
                 Response::Error { message, .. } => anyhow::bail!(message),
                 other => anyhow::bail!("несподівана відповідь ядра: {other:?}"),
+            }
+        }
+
+        Command::Variants {
+            url,
+            cookie,
+            referer,
+        } => {
+            let session = Session::from_parts(cookie, referer);
+            let варіанти = варіанти_посилання(&url, session).await?;
+
+            if варіанти.is_empty() {
+                println!("{}", t("no-variants"));
+            } else {
+                for v in варіанти {
+                    println!(
+                        "{:>6}  {:<12} {:>10}  {}",
+                        v.id,
+                        v.label,
+                        v.size.map_or_else(|| "—".to_owned(), format_size),
+                        v.note.unwrap_or_default()
+                    );
+                }
             }
         }
 
@@ -566,6 +610,7 @@ async fn main() -> Result<()> {
             checkpoint_ms,
             cookie,
             referer,
+            variant,
         } => {
             let urls = expand::розгорнути_шаблон(&url)?;
             if urls.len() != 1 {
@@ -584,17 +629,17 @@ async fn main() -> Result<()> {
             }
             let hls = HlsProtocol::new()?;
             if hls.handles(url) {
-                качати_модулем(&hls, url, out, limit_kb, session).await?;
+                качати_модулем(&hls, url, out, limit_kb, session, variant).await?;
                 return Ok(());
             }
             let dash = DashProtocol::new()?;
             if dash.handles(url) {
-                качати_модулем(&dash, url, out, limit_kb, session).await?;
+                качати_модулем(&dash, url, out, limit_kb, session, variant).await?;
                 return Ok(());
             }
             let yt = YtdlpProtocol::new();
             if yt.handles(url) {
-                качати_модулем(&yt, url, out, limit_kb, session).await?;
+                качати_модулем(&yt, url, out, limit_kb, session, variant).await?;
                 return Ok(());
             }
             let info = probe_with_session(&client, url, &session).await?;
@@ -752,6 +797,7 @@ async fn качати_модулем(
     out: Option<PathBuf>,
     limit_kb: u64,
     session: Session,
+    варіант: Option<String>,
 ) -> Result<()> {
     if limit_kb > 0 {
         match p.set_rate_limit(limit_kb.saturating_mul(1024)) {
@@ -763,7 +809,9 @@ async fn качати_модулем(
     }
     p.set_session(session.clone());
 
-    let probed = p.probe(url).await?;
+    // Проба з урахуванням вибору: 720p важить не стільки, скільки 360p, а
+    // «лише аудіо» дає інше розширення — склад файлів залежить від варіанта.
+    let probed = p.probe_variant(url, варіант.as_deref()).await?;
     for f in probed.files.iter().filter(|f| f.selected) {
         let safe = names::sanitize(&f.suggested_name);
         if safe != f.suggested_name {
@@ -797,6 +845,7 @@ async fn качати_модулем(
         resume: None,
         cancel: Cancel::new(),
         session,
+        variant: варіант,
     };
     if p.run(ctx, &НімийПрогрес).await?.is_some() {
         println!("{}", t("stopped-early"));
@@ -869,6 +918,36 @@ fn шляхи_для_обраних(out: Option<PathBuf>, files: &[PlannedFile])
 }
 
 /// Розмір у зрозумілому вигляді.
+/// Варіанти якості для посилання — тим самим модулем, який його й качатиме.
+///
+/// Ядро тут не потрібне: проба нічого не змінює, і людина має бачити перелік
+/// ще до того, як щось додала.
+async fn варіанти_посилання(
+    url: &str,
+    session: Session,
+) -> Result<Vec<downloader_core::protocol::Variant>> {
+    let hls = HlsProtocol::new()?;
+    if hls.handles(url) {
+        hls.set_session(session);
+        return Ok(hls.probe(url).await?.variants);
+    }
+
+    let dash = DashProtocol::new()?;
+    if dash.handles(url) {
+        dash.set_session(session);
+        return Ok(dash.probe(url).await?.variants);
+    }
+
+    let yt = YtdlpProtocol::new();
+    if yt.handles(url) {
+        yt.set_session(session);
+        return Ok(yt.probe(url).await?.variants);
+    }
+
+    // Звичайний файл має один вигляд — і це не помилка, а відповідь.
+    Ok(Vec::new())
+}
+
 /// Смужка виконаного для консолі.
 ///
 /// У консолі немає кольору, на який можна покластися, тож частка малюється
@@ -1166,7 +1245,7 @@ mod tests {
         ));
         std::fs::create_dir_all(&dir).expect("тека");
         let dest = dir.join("out.ts");
-        качати_модулем(&hls, &url, Some(dest.clone()), 0, Session::default())
+        качати_модулем(&hls, &url, Some(dest.clone()), 0, Session::default(), None)
             .await
             .expect("get");
 
@@ -1198,7 +1277,7 @@ mod tests {
         ));
         std::fs::create_dir_all(&dir).expect("тека");
         let dest = dir.join("out.mp4");
-        качати_модулем(&dash, &url, Some(dest.clone()), 0, Session::default())
+        качати_модулем(&dash, &url, Some(dest.clone()), 0, Session::default(), None)
             .await
             .expect("get");
 

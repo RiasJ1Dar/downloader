@@ -57,6 +57,11 @@ pub enum Request {
         /// Заголовок `Referer`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         referer: Option<String>,
+        /// Обраний варіант якості з `Response::Variants`.
+        ///
+        /// Рядок непрозорий: його видав модуль, йому ж він і повернеться.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        variant: Option<String>,
     },
 
     /// Список завдань.
@@ -82,6 +87,13 @@ pub enum Request {
     /// роздули б кожне повідомлення в рази, а бачить їх людина тільки в
     /// одному рядку за раз.
     Details { id: i64 },
+
+    /// Які варіанти якості має це посилання.
+    ///
+    /// Окремий запит, а не частина `Add`: спершу людина дивиться перелік,
+    /// і лише потім вирішує. Проба коштує мережевого звернення, тож робити
+    /// її на кожне додавання, коли вибір нікому не потрібен, не варто.
+    Variants { url: String },
 
     /// Підписатись на потік подій.
     Subscribe,
@@ -135,6 +147,9 @@ pub enum Response {
 
     /// Розкладка частин завдання.
     Details { id: i64, parts: Vec<PartView> },
+
+    /// Перелік варіантів якості. Порожньо — вибирати нема з чого.
+    Variants { variants: Vec<VariantView> },
 
     /// Поточні правила ядра.
     Settings {
@@ -201,6 +216,23 @@ pub enum Event {
 }
 
 /// Одна частина роботи очима клієнта — те, з чого малюється смужка сегментів.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VariantView {
+    /// Непрозорий ідентифікатор від модуля.
+    pub id: String,
+    /// Підпис для людини: «720p», «лише аудіо».
+    pub label: String,
+    /// Висота кадру, якщо це відео.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub height: Option<u32>,
+    /// Розмір, якщо джерело його називає.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size: Option<u64>,
+    /// Кодек, бітрейт — дрібний уточнювальний рядок.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct PartView {
     /// Початок у байтах.
@@ -272,6 +304,7 @@ mod tests {
             parts: Some(8),
             cookies: None,
             referer: None,
+            variant: None,
         };
 
         let json = serde_json::to_string(&req).unwrap();
@@ -305,7 +338,9 @@ mod tests {
                 parts,
                 cookies,
                 referer,
+                variant,
             } => {
+                assert!(variant.is_none(), "старий клієнт варіанта не шле");
                 assert_eq!(url, "https://e.com/a.bin");
                 assert!(dest.is_none());
                 assert!(parts.is_none());
@@ -324,6 +359,7 @@ mod tests {
             parts: None,
             cookies: Some("n=v; n2=v2".to_owned()),
             referer: Some("https://e.com/page".to_owned()),
+                    variant: None,
         };
         let json = serde_json::to_string(&req).unwrap();
         let back: Request = serde_json::from_str(&json).unwrap();

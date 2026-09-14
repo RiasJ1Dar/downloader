@@ -108,6 +108,7 @@ async fn додати_в_ядро(msg: FromExt) -> Result<i64> {
             parts: None,
             cookies: msg.cookies,
             referer: msg.referer,
+            variant: None,
         },
     )
     .await?;

@@ -138,7 +138,7 @@ async fn додати_з_буфера(engine: Arc<Engine>) -> anyhow::Result<()>
         anyhow::bail!("у буфері немає http(s) адреси");
     }
     for url in urls {
-        match engine.add(&url, None, None, Session::default()).await {
+        match engine.add(&url, None, None, Session::default(), None).await {
             Ok(id) => tracing::info!(id, "з буфера"),
             Err(e) => tracing::warn!(error = %e, "буфер: не додати"),
         }
