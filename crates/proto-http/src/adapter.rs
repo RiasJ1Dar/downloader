@@ -140,16 +140,17 @@ impl Protocol for HttpProtocol {
         // Через канал, а не прямим викликом: `ProgressSink` приходить
         // посиланням із чужим часом життя, а колбек рушія має бути
         // `'static`. Канал розв'язує це без клонування слухача.
-        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<(u64, usize)>();
+        type Поступ = (u64, usize, Vec<downloader_core::protocol::PartProgress>);
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Поступ>();
 
         let опції = Options {
             parts: self.parts,
             rate_limit: self.rate_limit.lock().map(|g| *g).unwrap_or(0),
             cancel: Some(ctx.cancel.clone()),
-            on_progress: Some(Arc::new(move |done, segments| {
+            on_progress: Some(Arc::new(move |done, segments, parts| {
                 // Помилка надсилання означає лише, що слухач пішов, —
                 // качання це не стосується.
-                if tx.send((done, segments)).is_err() {
+                if tx.send((done, segments, parts)).is_err() {
                     tracing::trace!("слухач прогресу пішов");
                 }
             })),
@@ -171,9 +172,12 @@ impl Protocol for HttpProtocol {
         };
 
         let пересилання = async {
-            while let Some((done, segments)) = rx.recv().await {
+            while let Some((done, segments, parts)) = rx.recv().await {
                 sink.report(Progress::Advanced { done });
                 sink.report(Progress::Segments { count: segments });
+                if !parts.is_empty() {
+                    sink.report(Progress::Layout { parts });
+                }
             }
         };
 

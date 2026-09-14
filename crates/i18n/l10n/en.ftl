@@ -1,4 +1,5 @@
 cli-about = Download manager: segmented transfers with resume
+tray-window = Open window
 tray-open = Open downloads folder
 tray-clip = Add from clipboard
 tray-quit = Quit

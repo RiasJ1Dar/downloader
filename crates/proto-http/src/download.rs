@@ -49,8 +49,13 @@ pub struct Options {
     ///
     /// Викликається з тіку чекпоінта, а не з гарячого шляху: рушій знає про
     /// байти, але не має знати ні про UI, ні про базу. Аргументи —
-    /// завантажено всього й на скільки частин поділено.
-    pub on_progress: Option<std::sync::Arc<dyn Fn(u64, usize) + Send + Sync>>,
+    /// завантажено всього, на скільки частин поділено і як саме вони лежать.
+    #[allow(clippy::type_complexity)]
+    pub on_progress: Option<
+        std::sync::Arc<
+            dyn Fn(u64, usize, Vec<downloader_core::protocol::PartProgress>) + Send + Sync,
+        >,
+    >,
     /// Як часто скидати стан на диск.
     ///
     /// Частіше — менше перекачувати після падіння живлення, але більше
@@ -353,8 +358,23 @@ fn checkpoint(shared: &Arc<Shared>) {
     {
         let done = state.table.downloaded();
         let segments = state.table.len();
+
+        // Розкладку збираємо тут, під тим самим локом, що й решту чисел:
+        // інакше смужка показувала б межі з одного моменту, а прогрес — з
+        // іншого, і на очах у людини вони б не сходились.
+        let parts: Vec<downloader_core::protocol::PartProgress> = state
+            .table
+            .segments()
+            .iter()
+            .map(|s| downloader_core::protocol::PartProgress {
+                start: s.start,
+                end: s.end,
+                done: s.done,
+            })
+            .collect();
+
         drop(state);
-        report(done, segments);
+        report(done, segments, parts);
     }
 
     if !shared.resumable {

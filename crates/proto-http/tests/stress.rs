@@ -19,6 +19,13 @@
 //! довжини з переплутаними або втраченими шматками всередині, і тільки хеш
 //! це показує.
 
+// Це тест: падіння тут і є повідомленням про помилку. Заборона на
+// `expect` і проковтнуті помилки призначена бойовому коду, а не перевіркам.
+#![expect(
+    clippy::let_underscore_must_use,
+    reason = "у тестах падіння — це і є повідомлення про помилку"
+)]
+
 use downloader_proto_http::download::{Options, download};
 use downloader_testserver::{EvilServer, expected_sha256};
 use reqwest::Client;

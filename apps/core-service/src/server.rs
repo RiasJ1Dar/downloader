@@ -117,6 +117,14 @@ async fn dispatch(req: Request, engine: &Arc<Engine>) -> Response {
             tasks: engine.list(),
         },
 
+        // Невідоме завдання віддає порожню розкладку, а не помилку: вікно
+        // питає про виділений рядок, і той міг зникнути між знімком і
+        // запитом. Помилка тут була б блиманням на порожньому місці.
+        Request::Details { id } => Response::Details {
+            id,
+            parts: engine.details(id),
+        },
+
         Request::Add {
             url,
             dest,

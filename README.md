@@ -37,6 +37,10 @@ apps/cli      командний рядок: перша оболонка й те
 Далі за планом: `proto-http`, `proto-hls`, `proto-dash`, `proto-external`,
 `ipc`, `winutil`, `apps/core-service`, `apps/nmhost`, `ext/`.
 
+Вікно: `apps/ui` (Avalonia). Збірка `dotnet build -c Release apps/ui`.
+Поклади `Downloader.Ui.exe` поруч із `downloader-core.exe` — у треї зʼявиться
+«Відкрити вікно». Закрите вікно не зупиняє качання.
+
 ## Збірка
 
 ```

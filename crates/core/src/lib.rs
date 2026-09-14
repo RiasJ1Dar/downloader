@@ -33,6 +33,10 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const PROTOCOL_VERSION: u32 = 1;
 
 #[cfg(test)]
+#[expect(
+    clippy::expect_used,
+    reason = "у тестах падіння — це і є повідомлення про помилку"
+)]
 mod tests {
     use super::*;
 

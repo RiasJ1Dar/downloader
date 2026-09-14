@@ -42,10 +42,12 @@ fn цикл(
     tx: watch::Sender<bool>,
     rt: tokio::runtime::Handle,
 ) -> anyhow::Result<()> {
+    let вікно = MenuItem::with_id("window", t("tray-window"), true, None);
     let відкрити = MenuItem::with_id("open", t("tray-open"), true, None);
     let буфер = MenuItem::with_id("clip", t("tray-clip"), true, None);
     let вихід = MenuItem::with_id("quit", t("tray-quit"), true, None);
     let menu = Menu::new();
+    menu.append(&вікно)?;
     menu.append(&відкрити)?;
     menu.append(&буфер)?;
     menu.append(&PredefinedMenuItem::separator())?;
@@ -65,6 +67,7 @@ fn цикл(
         if let Ok(ev) = menu_rx.try_recv() {
             let id = ev.id.0.as_str();
             match id {
+                "window" => відкрити_вікно(),
                 "open" => відкрити_теку(&downloads),
                 "clip" => {
                     let engine = Arc::clone(&engine);
@@ -97,6 +100,24 @@ fn іконка() -> anyhow::Result<Icon> {
         px[3] = 255;
     }
     Icon::from_rgba(rgba, N, N).map_err(|e| anyhow::anyhow!("іконка трею: {e}"))
+}
+
+fn відкрити_вікно() {
+    let r = std::env::current_exe().ok().and_then(|mut p| {
+        p.set_file_name(if cfg!(windows) {
+            "Downloader.Ui.exe"
+        } else {
+            "Downloader.Ui"
+        });
+        if p.is_file() {
+            std::process::Command::new(&p).spawn().ok()
+        } else {
+            None
+        }
+    });
+    if r.is_none() {
+        tracing::warn!("немає Downloader.Ui.exe поруч із ядром");
+    }
 }
 
 fn відкрити_теку(dir: &std::path::Path) {

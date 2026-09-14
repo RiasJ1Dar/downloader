@@ -1,0 +1,240 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:Downloader.Ui.ViewModels"
+        xmlns:c="using:Downloader.Ui.Controls"
+        x:Class="Downloader.Ui.MainWindow"
+        x:DataType="vm:MainViewModel"
+        Title="Downloader"
+        Width="980" Height="640"
+        MinWidth="680" MinHeight="420">
+
+    <Window.Resources>
+        <vm:КолірЗвʼязкуКонвертер x:Key="КолірЗвʼязку"/>
+    </Window.Resources>
+
+    <Window.Styles>
+        <!-- Рядок списку сам малює свої відступи: типовий ListBoxItem
+             додає власні, і разом виходить подвійна рамка. -->
+        <Style Selector="ListBoxItem">
+            <Setter Property="Padding" Value="10,8"/>
+            <Setter Property="MinHeight" Value="0"/>
+        </Style>
+
+        <!-- Кнопки в рядку: іконка без рамки, доки на неї не наведено. -->
+        <Style Selector="Button.icon">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Width" Value="30"/>
+            <Setter Property="Height" Value="28"/>
+            <Setter Property="Padding" Value="0"/>
+            <Setter Property="HorizontalContentAlignment" Value="Center"/>
+            <Setter Property="FontSize" Value="13"/>
+        </Style>
+
+        <Style Selector="TextBlock.dim">
+            <Setter Property="Opacity" Value="0.6"/>
+            <Setter Property="FontSize" Value="12"/>
+        </Style>
+
+        <Style Selector="TextBlock.label">
+            <Setter Property="Opacity" Value="0.5"/>
+            <Setter Property="FontSize" Value="11"/>
+        </Style>
+    </Window.Styles>
+
+    <Grid RowDefinitions="Auto,*,Auto,Auto" Margin="14">
+
+        <!-- ── Додавання ─────────────────────────────────────────────── -->
+        <Grid Grid.Row="0" ColumnDefinitions="*,Auto" Margin="0,0,0,12">
+            <TextBox Grid.Column="0"
+                     Text="{Binding NewUrl}"
+                     PlaceholderText="Вставте посилання"
+                     IsEnabled="{Binding Connected}">
+                <TextBox.KeyBindings>
+                    <KeyBinding Gesture="Enter" Command="{Binding AddCommand}"/>
+                </TextBox.KeyBindings>
+            </TextBox>
+
+            <Button Grid.Column="1"
+                    Margin="8,0,0,0"
+                    Padding="18,0"
+                    Content="Завантажити"
+                    Command="{Binding AddCommand}"
+                    IsDefault="True"
+                    IsEnabled="{Binding Connected}"/>
+        </Grid>
+
+        <!--
+            Список замість DataGrid навмисно: DataGrid в Avalonia 12
+            переведено в maintenance mode, а тут потрібні лише рядок,
+            смужка сегментів і кнопки.
+        -->
+        <Border Grid.Row="1"
+                BorderBrush="{DynamicResource SystemControlForegroundBaseLowBrush}"
+                BorderThickness="1"
+                CornerRadius="6"
+                ClipToBounds="True">
+          <Panel>
+            <!-- Порожній список має щось казати. Порожня рамка виглядає як
+                 несправність, а не як «ще нічого не додано». -->
+            <TextBlock Text="Тут будуть завантаження. Вставте посилання вище."
+                       Classes="dim"
+                       HorizontalAlignment="Center"
+                       VerticalAlignment="Center"
+                       IsVisible="{Binding !Tasks.Count}"/>
+
+            <ListBox ItemsSource="{Binding Tasks}"
+                     SelectedItem="{Binding Selected}"
+                     Background="Transparent">
+                <ListBox.ItemTemplate>
+                    <DataTemplate x:DataType="vm:TaskRow">
+                        <Grid ColumnDefinitions="*,Auto">
+                            <StackPanel Grid.Column="0" Spacing="5">
+
+                                <TextBlock Text="{Binding Name}"
+                                           FontWeight="SemiBold"
+                                           TextTrimming="CharacterEllipsis"/>
+
+                                <!--
+                                    Смужка сегментів замість ProgressBar.
+                                    Розкладка приходить лише для виділеного
+                                    рядка, решта малюється як звичайний
+                                    прогрес — за Fraction.
+                                -->
+                                <c:SegmentBar Height="8"
+                                              Parts="{Binding Parts}"
+                                              Total="{Binding Total}"
+                                              Fraction="{Binding Fraction}"/>
+
+                                <StackPanel Orientation="Horizontal" Spacing="14">
+                                    <TextBlock Classes="dim" Text="{Binding Status}"/>
+                                    <TextBlock Classes="dim" Text="{Binding SizeText}"/>
+                                    <TextBlock Classes="dim" Text="{Binding SpeedText}"/>
+                                    <TextBlock Classes="dim" Text="{Binding EtaText}"/>
+                                    <TextBlock Classes="dim" Text="{Binding SegmentsText}"/>
+                                </StackPanel>
+
+                                <!-- Помилку показуємо цілим текстом: людина має
+                                     впізнати проблему, не читаючи журналу. -->
+                                <TextBlock Text="{Binding Error}"
+                                           IsVisible="{Binding Error,
+                                               Converter={x:Static ObjectConverters.IsNotNull}}"
+                                           Foreground="IndianRed"
+                                           FontSize="12"
+                                           TextWrapping="Wrap"/>
+                            </StackPanel>
+
+                            <StackPanel Grid.Column="1"
+                                        Orientation="Horizontal"
+                                        Spacing="2"
+                                        Margin="10,0,0,0"
+                                        VerticalAlignment="Center">
+                                <Button Classes="icon"
+                                        Content="⏸"
+                                        ToolTip.Tip="Зупинити"
+                                        Command="{Binding $parent[ListBox].((vm:MainViewModel)DataContext).PauseCommand}"
+                                        CommandParameter="{Binding}"/>
+                                <Button Classes="icon"
+                                        Content="▶"
+                                        ToolTip.Tip="Продовжити"
+                                        Command="{Binding $parent[ListBox].((vm:MainViewModel)DataContext).ResumeCommand}"
+                                        CommandParameter="{Binding}"/>
+                                <Button Classes="icon"
+                                        Content="✕"
+                                        ToolTip.Tip="Прибрати зі списку (файл лишається)"
+                                        Command="{Binding $parent[ListBox].((vm:MainViewModel)DataContext).RemoveCommand}"
+                                        CommandParameter="{Binding}"/>
+                            </StackPanel>
+                        </Grid>
+                    </DataTemplate>
+                </ListBox.ItemTemplate>
+            </ListBox>
+          </Panel>
+        </Border>
+
+        <!--
+            ── Деталі виділеного ───────────────────────────────────────
+            Те саме, за чим у IDM відкривають вікно завантаження: форма
+            кривої швидкості й живий поділ на частини. Одне число
+            «2,4 МБ/с» не відрізняє рівне качання від пилки, що падає до
+            нуля щопівсекунди, — а це різні причини.
+        -->
+        <Border Grid.Row="2"
+                Margin="0,12,0,0"
+                Padding="14,12"
+                CornerRadius="6"
+                BorderThickness="1"
+                BorderBrush="{DynamicResource SystemControlForegroundBaseLowBrush}"
+                Background="{DynamicResource SystemControlBackgroundListLowBrush}"
+                IsVisible="{Binding Selected,
+                    Converter={x:Static ObjectConverters.IsNotNull}}">
+
+            <Grid ColumnDefinitions="*,16,300"
+                  DataContext="{Binding Selected}"
+                  x:DataType="vm:TaskRow">
+
+                <!-- Ліва половина: розкладка частин -->
+                <StackPanel Grid.Column="0" Spacing="7">
+                    <TextBlock Text="{Binding Name}"
+                               FontWeight="SemiBold"
+                               TextTrimming="CharacterEllipsis"/>
+
+                    <TextBlock Classes="label"
+                               Text="{Binding Url}"
+                               TextTrimming="CharacterEllipsis"/>
+
+                    <c:SegmentBar Height="22"
+                                  Parts="{Binding Parts}"
+                                  Total="{Binding Total}"
+                                  Fraction="{Binding Fraction}"/>
+
+                    <StackPanel Orientation="Horizontal" Spacing="16">
+                        <TextBlock Classes="dim" Text="{Binding SizeText}"/>
+                        <TextBlock Classes="dim" Text="{Binding SegmentsText}"/>
+                        <TextBlock Classes="dim" Text="{Binding EtaText}"/>
+                    </StackPanel>
+                </StackPanel>
+
+                <!-- Права половина: графік швидкості -->
+                <StackPanel Grid.Column="2" Spacing="6">
+                    <Grid ColumnDefinitions="*,Auto">
+                        <TextBlock Grid.Column="0"
+                                   Classes="label"
+                                   Text="Швидкість, останні 30 с"/>
+                        <TextBlock Grid.Column="1"
+                                   Classes="label"
+                                   Text="{Binding PeakText}"/>
+                    </Grid>
+
+                    <Border CornerRadius="4"
+                            Background="{DynamicResource SystemControlBackgroundAltHighBrush}"
+                            Padding="1">
+                        <c:SpeedChart Height="66"
+                                      Samples="{Binding SpeedHistory}"
+                                      Revision="{Binding SpeedRevision}"/>
+                    </Border>
+
+                    <TextBlock Text="{Binding SpeedText}"
+                               FontWeight="SemiBold"
+                               HorizontalAlignment="Right"/>
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <!-- Рядок стану: кружечок зв'язку плюс останнє повідомлення. Без
+             кружечка «з'єднано з ядром» губиться серед інших текстів, а це
+             найважливіше, що тут є: без ядра не працює нічого. -->
+        <StackPanel Grid.Row="3"
+                    Orientation="Horizontal"
+                    Spacing="7"
+                    Margin="2,10,0,0">
+            <Ellipse Width="8" Height="8"
+                     VerticalAlignment="Center"
+                     Fill="{Binding Connected,
+                         Converter={StaticResource КолірЗвʼязку}}"/>
+            <TextBlock Classes="dim"
+                       Text="{Binding Status}"
+                       TextTrimming="CharacterEllipsis"/>
+        </StackPanel>
+    </Grid>
+</Window>

@@ -466,7 +466,7 @@ impl Store {
         Ok(self
             .categories()?
             .into_iter()
-            .find(|c| c.extensions.iter().any(|e| *e == ext)))
+            .find(|c| c.extensions.contains(&ext)))
     }
 }
 
@@ -502,6 +502,8 @@ fn now_ms() -> i64 {
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::let_underscore_must_use,
     reason = "у тестах падіння — це і є повідомлення про помилку"
 )]
 mod tests {

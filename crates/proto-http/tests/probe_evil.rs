@@ -4,6 +4,13 @@
 //! погано саме так». Заготовки на кшталт «перевіримо, що працює» тут
 //! марні — рушій ламається саме на крайніх випадках.
 
+// Це тест: падіння тут і є повідомленням про помилку. Заборона на
+// `expect` і проковтнуті помилки призначена бойовому коду, а не перевіркам.
+#![expect(
+    clippy::expect_used,
+    reason = "у тестах падіння — це і є повідомлення про помилку"
+)]
+
 use downloader_core::protocol::Session;
 use downloader_proto_http::headers::RangeSupport;
 use downloader_proto_http::probe::{probe, probe_with_session};

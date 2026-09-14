@@ -27,7 +27,7 @@ use downloader_core::protocol::{
     Session,
 };
 use downloader_core::store::{NewFile, NewTask, Status, Store};
-use downloader_ipc::protocol::{Event, TaskView};
+use downloader_ipc::protocol::{Event, PartView, TaskView};
 use downloader_winutil::{motw, names, paths, вистачить_місця};
 use tokio::sync::broadcast;
 
@@ -60,6 +60,11 @@ struct Live {
     session: Session,
     protocol: String,
     targets: Vec<PathBuf>,
+    /// Розкладка частин — для «вікна сегментів».
+    ///
+    /// Живе лише в пам'яті й лише для активних завдань: після завершення
+    /// вона нікому не потрібна, а в базі роздувала б рядок.
+    parts: Vec<downloader_core::protocol::PartProgress>,
 }
 
 impl Live {
@@ -117,6 +122,7 @@ impl ProgressSink for LiveSink {
             Progress::TotalKnown { total } => task.total = Some(total),
             Progress::Advanced { done } => task.done = done,
             Progress::Segments { count } => task.segments = count,
+            Progress::Layout { parts } => task.parts = parts,
             // Стан відновлення зберігає сам модуль поруч із файлом. Ядро
             // тримає його лише для протоколів, які не мають власного
             // sidecar — наразі таких немає.
@@ -197,6 +203,36 @@ impl Engine {
         // Найновіші зверху — так само, як у базі.
         out.sort_by_key(|b| std::cmp::Reverse(b.id));
         out
+    }
+
+    /// Розкладка частин одного завдання.
+    ///
+    /// Порожньо — коли завдання не качається або качається одним потоком:
+    /// малювати «один сегмент на всю ширину» те саме, що звичайна смужка
+    /// прогресу, лише дорожче.
+    ///
+    /// Це запит **на вимогу**, а не частина знімка. Розкладка цікава тільки
+    /// для одного розгорнутого завдання, а в знімку вона помножилась би на
+    /// весь список — п'ятдесят завдань по шістнадцять частин чотири рази на
+    /// секунду.
+    pub fn details(&self, id: i64) -> Vec<PartView> {
+        let Ok(live) = self.live.lock() else {
+            tracing::error!("список завдань отруєно");
+            return Vec::new();
+        };
+
+        live.get(&id)
+            .map(|task| {
+                task.parts
+                    .iter()
+                    .map(|p| PartView {
+                        start: p.start,
+                        end: p.end,
+                        done: p.done,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     /// Додати завантаження й одразу почати його.
@@ -309,6 +345,7 @@ impl Engine {
                     session: session.clone(),
                     protocol: protocol_name.clone(),
                     targets: targets.clone(),
+                    parts: Vec::new(),
                 },
             );
         }
@@ -804,44 +841,41 @@ mod tests {
         std::env::temp_dir().join(format!("dl-e10-absent-{tag}"))
     }
 
+    /// Зразок живого завдання для тестів.
+    ///
+    /// Поля перелічені **тут одного разу**, а не в кожному тесті: інакше
+    /// кожне нове поле `Live` валить збірку в п'яти місцях і тест
+    /// перетворюється на список присвоєнь, серед яких не видно, що саме
+    /// перевіряється.
+    fn зразок(id: i64, url: &str, status: Status) -> Live {
+        Live {
+            id,
+            url: url.into(),
+            name: url.into(),
+            status,
+            done: 0,
+            total: None,
+            segments: 0,
+            error: None,
+            prev_done: 0,
+            speed: 0,
+            session: Session::default(),
+            protocol: "http".into(),
+            targets: vec![],
+            parts: Vec::new(),
+        }
+    }
+
     #[test]
     fn знайти_живе_бачить_running_і_ігнорує_done() {
         let live = Mutex::new(HashMap::from([
             (
                 1,
-                Live {
-                    id: 1,
-                    url: "https://a".into(),
-                    name: "a".into(),
-                    status: Status::Done,
-                    done: 0,
-                    total: None,
-                    segments: 0,
-                    error: None,
-                    prev_done: 0,
-                    speed: 0,
-                    session: Session::default(),
-                    protocol: "http".into(),
-                    targets: vec![],
-                },
+                зразок(1, "https://a", Status::Done),
             ),
             (
                 2,
-                Live {
-                    id: 2,
-                    url: "https://b".into(),
-                    name: "b".into(),
-                    status: Status::Running,
-                    done: 0,
-                    total: None,
-                    segments: 0,
-                    error: None,
-                    prev_done: 0,
-                    speed: 0,
-                    session: Session::default(),
-                    protocol: "http".into(),
-                    targets: vec![],
-                },
+                зразок(2, "https://b", Status::Running),
             ),
         ]));
         assert_eq!(знайти_живе(&live, "https://b"), Some(2));
@@ -853,57 +887,15 @@ mod tests {
         let mut live = HashMap::new();
         live.insert(
             5,
-            Live {
-                id: 5,
-                url: "https://c".into(),
-                name: "c".into(),
-                status: Status::Queued,
-                done: 0,
-                total: None,
-                segments: 0,
-                error: None,
-                prev_done: 0,
-                speed: 0,
-                session: Session::default(),
-                protocol: "http".into(),
-                targets: vec![],
-            },
+            зразок(5, "https://c", Status::Queued),
         );
         live.insert(
             3,
-            Live {
-                id: 3,
-                url: "https://d".into(),
-                name: "d".into(),
-                status: Status::Queued,
-                done: 0,
-                total: None,
-                segments: 0,
-                error: None,
-                prev_done: 0,
-                speed: 0,
-                session: Session::default(),
-                protocol: "http".into(),
-                targets: vec![],
-            },
+            зразок(3, "https://d", Status::Queued),
         );
         live.insert(
             4,
-            Live {
-                id: 4,
-                url: "https://e".into(),
-                name: "e".into(),
-                status: Status::Running,
-                done: 0,
-                total: None,
-                segments: 0,
-                error: None,
-                prev_done: 0,
-                speed: 0,
-                session: Session::default(),
-                protocol: "http".into(),
-                targets: vec![],
-            },
+            зразок(4, "https://e", Status::Running),
         );
         assert_eq!(id_наступного_в_черзі(&live), Some(3));
     }

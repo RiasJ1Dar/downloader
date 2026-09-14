@@ -197,11 +197,46 @@ pub enum Progress {
     Advanced { done: u64 },
     /// Змінилась кількість частин, на які поділено роботу.
     Segments { count: usize },
+    /// Розкладка роботи по частинах — те, що малює «вікно сегментів».
+    ///
+    /// Шлеться **рідше** за [`Progress::Advanced`]: це десятки чисел, а не
+    /// одне, і оновлювати їх щочверть секунди для всіх завдань немає сенсу.
+    /// Модуль може не слати цього взагалі — тоді вікно покаже лише
+    /// кількість частин.
+    Layout { parts: Vec<PartProgress> },
     /// Модуль просить зберегти свій стан відновлення.
     ///
     /// ⚠️ Ядро зобов'язане записати його **після** того, як дані вже на
     /// диску. Стан, що випереджає байти, дає докачування з дірки.
     Checkpoint { resume: ResumeBlob },
+}
+
+/// Одна частина роботи: звідки, доки й скільки вже зроблено.
+///
+/// Для HTTP це сегмент файла, для торента — діапазон частин. Ядро не
+/// тлумачить ці числа, лише передає далі: вікно малює з них смужку.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PartProgress {
+    /// Початок у байтах від початку файла.
+    pub start: u64,
+    /// Кінець, не включно.
+    pub end: u64,
+    /// Скільки байтів від `start` уже на диску.
+    pub done: u64,
+}
+
+impl PartProgress {
+    /// Довжина частини.
+    #[must_use]
+    pub const fn len(&self) -> u64 {
+        self.end - self.start
+    }
+
+    /// Чи частина порожня.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.start == self.end
+    }
 }
 
 /// Чи вдалося застосувати ліміт швидкості.
@@ -434,6 +469,7 @@ mod tests {
                     Progress::TotalKnown { total } => format!("total={total}"),
                     Progress::Advanced { done } => format!("done={done}"),
                     Progress::Segments { count } => format!("segments={count}"),
+                    Progress::Layout { parts } => format!("layout={}", parts.len()),
                     Progress::Checkpoint { resume } => {
                         format!("checkpoint={}", String::from_utf8_lossy(&resume))
                     }

@@ -125,12 +125,15 @@ impl SegmentTable {
             };
         }
 
-        let max_parts = if min_chunk == 0 {
-            parts.max(1)
-        } else {
-            let fit = (total / min_chunk).max(1);
-            let fit = usize::try_from(fit).unwrap_or(usize::MAX);
-            parts.max(1).min(fit)
+        // `checked_div` замість перевірки на нуль вручну: нульовий
+        // `min_chunk` означає «обмеження немає», і це той самий випадок, що
+        // «поділити не вийшло».
+        let max_parts = match total.checked_div(min_chunk) {
+            Some(fit) => {
+                let fit = usize::try_from(fit.max(1)).unwrap_or(usize::MAX);
+                parts.max(1).min(fit)
+            }
+            None => parts.max(1),
         };
 
         let parts = max_parts.max(1);
@@ -373,6 +376,7 @@ impl SegmentTable {
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,
+    clippy::expect_used,
     clippy::panic,
     reason = "у тестах падіння — це і є повідомлення про помилку"
 )]

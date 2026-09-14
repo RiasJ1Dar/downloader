@@ -3,6 +3,14 @@
 //! Головна перевірка кожного тесту — **SHA-256 файла на диску**. Розмір і
 //! статус нічого не доводять: биті дані зазвичай мають правильну довжину.
 
+// Це тест: падіння тут і є повідомленням про помилку. Заборона на
+// `expect` і проковтнуті помилки призначена бойовому коду, а не перевіркам.
+#![expect(
+    clippy::expect_used,
+    clippy::let_underscore_must_use,
+    reason = "у тестах падіння — це і є повідомлення про помилку"
+)]
+
 use downloader_core::protocol::Session;
 use downloader_proto_http::download::{DownloadError, Options, download};
 use downloader_testserver::{EvilServer, expected_sha256};

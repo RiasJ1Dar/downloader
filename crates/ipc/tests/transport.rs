@@ -1,5 +1,12 @@
 //! Перевірка локального каналу на справжніх named pipe / сокетах.
 
+// Це тест: падіння тут і є повідомленням про помилку. Заборона на
+// `expect` призначена бойовому коду, а не перевіркам.
+#![expect(
+    clippy::expect_used,
+    reason = "у тестах падіння — це і є повідомлення про помилку"
+)]
+
 use downloader_ipc::frame::{read_frame, write_frame};
 use downloader_ipc::protocol::{PROTOCOL_VERSION, Request, Response};
 use downloader_ipc::transport::{Listener, connect_to};

@@ -261,6 +261,9 @@ pub fn remove(target: &Path) -> Result<()> {
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::let_underscore_must_use,
     reason = "у тестах падіння — це і є повідомлення про помилку"
 )]
 mod tests {

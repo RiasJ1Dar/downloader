@@ -15,3 +15,10 @@
 *.md
 !README.md
 
+# .NET: збірки вікна
+bin/
+obj/
+
+# знімки Archify visual-check — не в git
+docs/*.visual-check*
+docs/*.vcheck-out.txt
