@@ -18,9 +18,10 @@ use sha2::{Digest, Sha256};
 
 /// Запущене ядро, яке прибирає за собою.
 struct Ядро {
-    child: Child,
+    child: Option<Child>,
     pipe: String,
     data: PathBuf,
+    прибрати_теку: bool,
 }
 
 impl Ядро {
@@ -50,7 +51,20 @@ impl Ядро {
             .stderr(Stdio::null())
             .spawn()?;
 
-        Ok(Self { child, pipe, data })
+        Ok(Self {
+            child: Some(child),
+            pipe,
+            data,
+            прибрати_теку: true,
+        })
+    }
+
+    /// Вбити процес, лишивши теку з базою — для перевірки персисту.
+    fn зупинити(&mut self) {
+        if let Some(mut c) = self.child.take() {
+            let _ = c.kill();
+            let _ = c.wait();
+        }
     }
 
     /// Дочекатись, поки ядро підніме канал.
@@ -70,9 +84,10 @@ impl Ядро {
 
 impl Drop for Ядро {
     fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-        let _ = std::fs::remove_dir_all(&self.data);
+        self.зупинити();
+        if self.прибрати_теку {
+            let _ = std::fs::remove_dir_all(&self.data);
+        }
     }
 }
 
@@ -304,5 +319,102 @@ async fn чужа_версія_протоколу_відхиляється_зр�
         other => anyhow::bail!("несумісний клієнт не відхилено: {other:?}"),
     }
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn налаштування_переживають_рестарт_ядра() -> anyhow::Result<()> {
+    let mut ядро = Ядро::запустити("cfg")?;
+    ядро.прибрати_теку = false;
+    let mut client = ядро.дочекатись().await?;
+    привітатись(&mut client).await?;
+
+    write_frame(
+        &mut client,
+        &Request::Configure {
+            max_concurrent: Some(7),
+            rate_limit: Some(50 * 1024),
+            post_action: Some("sleep".into()),
+            schedule_from: Some("22:00".into()),
+            schedule_to: Some("07:00".into()),
+            quiet_from: Some("00:00".into()),
+            quiet_to: Some("06:00".into()),
+            quiet_rate: Some(10 * 1024),
+        },
+    )
+    .await?;
+    match read_frame::<_, Response>(&mut client).await? {
+        Response::Ok => {}
+        other => anyhow::bail!("configure не прийнято: {other:?}"),
+    }
+
+    let db = ядро.data.join("tasks.db");
+    let downloads = ядро.data.clone();
+    ядро.зупинити();
+    drop(client);
+
+    // Дати першому процесу час відпустити файл бази.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    let unique = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let pipe = if cfg!(windows) {
+        format!(r"\\.\pipe\downloader-e2e-cfg2-{unique}")
+    } else {
+        format!("/tmp/downloader-e2e-cfg2-{unique}.sock")
+    };
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_downloader-core"))
+        .arg("--pipe")
+        .arg(&pipe)
+        .arg("--db")
+        .arg(&db)
+        .arg("--downloads")
+        .arg(&downloads)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()?;
+
+    let mut client2 = {
+        let mut s = None;
+        for _ in 0..100 {
+            if let Ok(c) = connect_to(&pipe).await {
+                s = Some(c);
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        s.ok_or_else(|| anyhow::anyhow!("друге ядро не підняло канал"))?
+    };
+    привітатись(&mut client2).await?;
+    write_frame(&mut client2, &Request::Settings).await?;
+    match read_frame::<_, Response>(&mut client2).await? {
+        Response::Settings {
+            max_concurrent,
+            rate_limit,
+            post_action,
+            schedule_from,
+            schedule_to,
+            quiet_from,
+            quiet_to,
+            quiet_rate,
+        } => {
+            assert_eq!(max_concurrent, 7);
+            assert_eq!(rate_limit, 50 * 1024);
+            assert_eq!(post_action, "sleep");
+            assert_eq!(schedule_from.as_deref(), Some("22:00"));
+            assert_eq!(schedule_to.as_deref(), Some("07:00"));
+            assert_eq!(quiet_from.as_deref(), Some("00:00"));
+            assert_eq!(quiet_to.as_deref(), Some("06:00"));
+            assert_eq!(quiet_rate, 10 * 1024);
+        }
+        other => anyhow::bail!("settings: {other:?}"),
+    }
+
+    let _ = child.kill();
+    let _ = child.wait();
+    let _ = std::fs::remove_dir_all(&downloads);
     Ok(())
 }

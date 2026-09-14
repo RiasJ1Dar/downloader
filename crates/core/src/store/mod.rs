@@ -8,6 +8,7 @@
 //! Розподіл простий: **база — це що качаємо, sidecar — це докуди дійшли**.
 
 pub mod schema;
+pub mod settings;
 
 use std::path::{Path, PathBuf};
 
@@ -15,6 +16,8 @@ use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::error::{Error, Result};
 use crate::segments::{Segment, SegmentTable};
+
+pub use settings::{Settings, SettingsPatch};
 
 /// Ідентифікатор завдання.
 pub type TaskId = i64;
@@ -468,6 +471,18 @@ impl Store {
             .into_iter()
             .find(|c| c.extensions.contains(&ext)))
     }
+
+    // ── Налаштування ────────────────────────────────────────────────────
+
+    /// Поточні правила ядра. Відсутня таблиця чи ключі — типові значення.
+    pub fn settings(&self) -> Result<Settings> {
+        Settings::load(&self.conn)
+    }
+
+    /// Записати правила. Викликач уже перевірив поля.
+    pub fn save_settings(&mut self, settings: &Settings) -> Result<()> {
+        settings.save(&self.conn)
+    }
 }
 
 fn task_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Result<Task>> {
@@ -508,6 +523,7 @@ fn now_ms() -> i64 {
 )]
 mod tests {
     use super::*;
+    use crate::PostAction;
 
     fn звичайне_завдання(url: &str, path: &str) -> NewTask {
         NewTask {
@@ -806,5 +822,105 @@ mod tests {
         let _ = std::fs::remove_file(&dir);
         let _ = std::fs::remove_file(dir.with_extension("db-wal"));
         let _ = std::fs::remove_file(dir.with_extension("db-shm"));
+    }
+
+    #[test]
+    fn нова_база_має_таблицю_setting() {
+        let mut s = Store::in_memory().unwrap();
+        let def = Settings::default();
+        assert_eq!(s.settings().unwrap(), def);
+
+        let mut next = def.clone();
+        next.max_concurrent = 8;
+        next.rate_limit = 4096;
+        next.post_action = PostAction::Sleep;
+        next.schedule_from = Some(22 * 60);
+        next.schedule_to = Some(7 * 60);
+        next.quiet_from = Some(0);
+        next.quiet_to = Some(6 * 60);
+        next.quiet_rate = 50 * 1024;
+        s.save_settings(&next).unwrap();
+        assert_eq!(s.settings().unwrap(), next);
+    }
+
+    #[test]
+    fn налаштування_переживають_перезапуск() {
+        let mut dir = std::env::temp_dir();
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        dir.push(format!("store-settings-{unique}.db"));
+
+        {
+            let mut s = Store::open(&dir).unwrap();
+            let next = Settings {
+                max_concurrent: 5,
+                post_action: PostAction::Shutdown,
+                schedule_from: Some(1),
+                schedule_to: Some(2),
+                ..Settings::default()
+            };
+            s.save_settings(&next).unwrap();
+        }
+
+        {
+            let s = Store::open(&dir).unwrap();
+            let back = s.settings().unwrap();
+            assert_eq!(back.max_concurrent, 5);
+            assert_eq!(back.post_action, PostAction::Shutdown);
+            assert_eq!(back.schedule_from, Some(1));
+            assert_eq!(back.schedule_to, Some(2));
+        }
+
+        let _ = std::fs::remove_file(&dir);
+        let _ = std::fs::remove_file(dir.with_extension("db-wal"));
+        let _ = std::fs::remove_file(dir.with_extension("db-shm"));
+    }
+
+    #[test]
+    fn порожнє_вікно_прибирає_ключ() {
+        let mut s = Store::in_memory().unwrap();
+        let with_window = Settings {
+            schedule_from: Some(10),
+            schedule_to: Some(20),
+            ..Settings::default()
+        };
+        s.save_settings(&with_window).unwrap();
+        s.save_settings(&Settings::default()).unwrap();
+        let back = s.settings().unwrap();
+        assert!(back.schedule_from.is_none());
+        assert!(back.schedule_to.is_none());
+    }
+
+    #[test]
+    fn v1_база_отримує_setting() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        schema::configure(&conn).unwrap();
+        schema::seed_v1(&conn).unwrap();
+        let v: i64 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(v, 1);
+
+        schema::migrate(&conn).unwrap();
+        let v: i64 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(v, schema::SCHEMA_VERSION);
+
+        conn.execute(
+            "INSERT INTO setting (key, value) VALUES ('max_concurrent', '4')",
+            [],
+        )
+        .unwrap();
+        let n: String = conn
+            .query_row(
+                "SELECT value FROM setting WHERE key = 'max_concurrent'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(n, "4");
     }
 }

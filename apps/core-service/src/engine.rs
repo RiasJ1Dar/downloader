@@ -20,7 +20,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 
 use downloader_core::protocol::{
@@ -28,6 +28,9 @@ use downloader_core::protocol::{
     Session,
 };
 use downloader_core::store::{NewFile, NewTask, Status, Store};
+use downloader_core::{Settings, SettingsPatch};
+
+use crate::after::AfterQueue;
 use downloader_ipc::protocol::{Event, PartView, TaskView};
 use downloader_winutil::{motw, names, paths, вистачить_місця};
 use tokio::sync::broadcast;
@@ -148,10 +151,13 @@ pub struct Engine {
     cancels: Mutex<HashMap<i64, Cancel>>,
     /// Тека за замовчуванням, коли клієнт не сказав, куди класти.
     downloads_dir: PathBuf,
-    /// Скільки завдань качати одночасно. Решта чекають у `queued`.
-    max_concurrent: AtomicUsize,
-    /// Ліміт байт/с на модуль. 0 — без обмеження.
-    rate_limit: AtomicU64,
+    /// Правила ядра. Персистяться в SQLite; атомні дзеркала не потрібні —
+    /// читаємо під час старту завдання, не на кожному байті.
+    налаштування: Mutex<Settings>,
+    /// Післядія порожньої черги — окремий модуль, не частина качання.
+    after: Arc<AfterQueue>,
+    /// Чи розклад дозволяв старт на попередньому тіку.
+    вікно_було: std::sync::atomic::AtomicBool,
 }
 
 impl Engine {
@@ -171,16 +177,25 @@ impl Engine {
 
         tracing::info!(модулі = ?registry.names(), "реєстр протоколів");
 
-        let max_concurrent = std::env::var("DOWNLOADER_MAX_CONCURRENT")
+        let mut stored = store.settings().unwrap_or_else(|e| {
+            tracing::warn!(error = %e, "налаштування не прочитано, беру типові");
+            Settings::default()
+        });
+        if let Some(n) = std::env::var("DOWNLOADER_MAX_CONCURRENT")
             .ok()
             .and_then(|s| s.parse().ok())
-            .filter(|&n: &usize| n >= 1)
-            .unwrap_or(3);
-        let rate_limit = std::env::var("DOWNLOADER_RATE_LIMIT")
+            .filter(|&n: &u32| n >= 1)
+        {
+            stored.max_concurrent = n;
+        }
+        if let Some(r) = std::env::var("DOWNLOADER_RATE_LIMIT")
             .ok()
             .and_then(|s| s.parse().ok())
-            .unwrap_or(0);
+        {
+            stored.rate_limit = r;
+        }
 
+        let вікно = stored.downloads_allowed(хвилини_зараз());
         let engine = Arc::new(Self {
             store: Mutex::new(store),
             live: Arc::new(Mutex::new(HashMap::new())),
@@ -188,8 +203,9 @@ impl Engine {
             registry,
             cancels: Mutex::new(HashMap::new()),
             downloads_dir,
-            max_concurrent: AtomicUsize::new(max_concurrent),
-            rate_limit: AtomicU64::new(rate_limit),
+            налаштування: Mutex::new(stored),
+            after: Arc::new(AfterQueue::default()),
+            вікно_було: std::sync::atomic::AtomicBool::new(вікно),
         });
 
         engine.clone().start_ticker();
@@ -197,27 +213,48 @@ impl Engine {
     }
 
     fn стеля(&self) -> usize {
-        self.max_concurrent.load(Ordering::Relaxed)
+        self.налаштування
+            .lock()
+            .map(|s| usize::try_from(s.max_concurrent).unwrap_or(1).max(1))
+            .unwrap_or(3)
     }
 
-    /// Поточні ліміти для вікна налаштувань.
-    pub fn settings(&self) -> (u32, u64) {
-        (
-            u32::try_from(self.стеля()).unwrap_or(u32::MAX),
-            self.rate_limit.load(Ordering::Relaxed),
-        )
+    fn вікно_відкрите(&self) -> bool {
+        let now = хвилини_зараз();
+        self.налаштування
+            .lock()
+            .map(|s| s.downloads_allowed(now))
+            .unwrap_or(true)
     }
 
-    /// Змінити стелю одночасних і/або ліміт швидкості.
-    pub fn configure(self: &Arc<Self>, max_concurrent: Option<u32>, rate_limit: Option<u64>) {
-        if let Some(n) = max_concurrent {
-            let n = usize::try_from(n).unwrap_or(1).max(1);
-            self.max_concurrent.store(n, Ordering::Relaxed);
-            self.clone().спробувати_наступне();
+    /// Поточні правила для вікна й CLI.
+    pub fn settings(&self) -> Settings {
+        self.налаштування
+            .lock()
+            .map(|s| s.clone())
+            .unwrap_or_default()
+    }
+
+    /// Змінити правила ядра й записати їх у базу.
+    pub fn configure(self: &Arc<Self>, patch: SettingsPatch) -> anyhow::Result<()> {
+        let mut next = self.settings();
+        next.apply_patch(patch)?;
+
+        {
+            let mut store = self
+                .store
+                .lock()
+                .map_err(|_| anyhow::anyhow!("сховище отруєно"))?;
+            store.save_settings(&next)?;
         }
-        if let Some(r) = rate_limit {
-            self.rate_limit.store(r, Ordering::Relaxed);
+        if let Ok(mut g) = self.налаштування.lock() {
+            *g = next.clone();
         }
+        self.вікно_було
+            .store(next.downloads_allowed(хвилини_зараз()), Ordering::Relaxed);
+        self.clone().спробувати_наступне();
+        self.clone().після_зміни_черги();
+        Ok(())
     }
 
     /// Підписатись на потік подій.
@@ -351,10 +388,12 @@ impl Engine {
             let Ok(live) = self.live.lock() else {
                 anyhow::bail!("список завдань отруєно");
             };
-            live.values()
-                .filter(|t| t.status == Status::Running)
-                .count()
-                < self.стеля()
+            self.вікно_відкрите()
+                && live
+                    .values()
+                    .filter(|t| t.status == Status::Running)
+                    .count()
+                    < self.стеля()
         };
 
         if let Ok(mut live) = self.live.lock() {
@@ -394,8 +433,13 @@ impl Engine {
             );
         } else {
             self.set_status(id, Status::Queued, None);
-            tracing::info!(id, "завдання в черзі (стеля {n} одночасних)", n = self.стеля());
+            if self.вікно_відкрите() {
+                tracing::info!(id, "завдання в черзі (стеля {n} одночасних)", n = self.стеля());
+            } else {
+                tracing::info!(id, "завдання в черзі (поза розкладом)");
+            }
         }
+        self.clone().після_зміни_черги();
         Ok(id)
     }
 
@@ -425,7 +469,11 @@ impl Engine {
                 c.insert(id, cancel.clone());
             }
 
-            let limit = self.rate_limit.load(Ordering::Relaxed);
+            let limit = self
+                .налаштування
+                .lock()
+                .map(|s| s.effective_rate(хвилини_зараз()))
+                .unwrap_or(0);
             if limit > 0 {
                 match module.set_rate_limit(limit) {
                     RateLimitSupport::Applied => {}
@@ -451,11 +499,14 @@ impl Engine {
                 Ok(Some(_resume)) => {
                     self.pause_finished(id);
                     self.clone().спробувати_наступне();
+                    self.clone().після_зміни_черги();
                 }
 
                 Ok(None) => {
                     if let Err(e) = module.verify(&ctx).await {
                         self.fail(id, &e.to_string());
+                        self.clone().спробувати_наступне();
+                        self.clone().після_зміни_черги();
                         return;
                     }
 
@@ -479,11 +530,13 @@ impl Engine {
                         .unwrap_or_default();
                     let _ = self.events.send(Event::Finished { id, path, bytes });
                     self.clone().спробувати_наступне();
+                    self.clone().після_зміни_черги();
                 }
 
                 Err(e) => {
                     self.fail(id, &e.to_string());
                     self.clone().спробувати_наступне();
+                    self.clone().після_зміни_черги();
                 }
             }
         });
@@ -491,6 +544,9 @@ impl Engine {
 
     /// Якщо є вільний слот — зняти найстаріше queued і запустити.
     fn спробувати_наступне(self: Arc<Self>) {
+        if !self.вікно_відкрите() {
+            return;
+        }
         let job = {
             let Ok(mut live) = self.live.lock() else {
                 return;
@@ -574,10 +630,12 @@ impl Engine {
             let Ok(live) = self.live.lock() else {
                 anyhow::bail!("список завдань отруєно");
             };
-            live.values()
-                .filter(|t| t.status == Status::Running)
-                .count()
-                < self.стеля()
+            self.вікно_відкрите()
+                && live
+                    .values()
+                    .filter(|t| t.status == Status::Running)
+                    .count()
+                    < self.стеля()
         };
 
         if let Ok(mut live) = self.live.lock()
@@ -602,6 +660,7 @@ impl Engine {
         } else {
             self.set_status(id, Status::Queued, None);
         }
+        self.clone().після_зміни_черги();
         Ok(())
     }
 
@@ -669,7 +728,7 @@ impl Engine {
     }
 
     /// Прибрати завдання зі списку.
-    pub fn remove(&self, id: i64, with_file: bool) -> anyhow::Result<()> {
+    pub fn remove(self: &Arc<Self>, id: i64, with_file: bool) -> anyhow::Result<()> {
         let path = {
             let store = self
                 .store
@@ -698,6 +757,7 @@ impl Engine {
             let _ = downloader_core::state::remove(&p);
         }
 
+        self.clone().після_зміни_черги();
         Ok(())
     }
 
@@ -736,13 +796,20 @@ impl Engine {
         }
     }
 
-    /// Раз на тік розсилати знімок списку.
+    /// Раз на тік розсилати знімок списку й відкривати вікно розкладу.
     fn start_ticker(self: Arc<Self>) {
         tokio::spawn(async move {
             let mut tick = tokio::time::interval(TICK);
             loop {
                 tick.tick().await;
                 self.refresh_progress();
+
+                let open = self.вікно_відкрите();
+                let was = self.вікно_було.swap(open, Ordering::Relaxed);
+                if open && !was {
+                    tracing::info!("розклад: вікно відкрилось, стартую чергу");
+                    self.clone().спробувати_наступне();
+                }
 
                 // Нема кому слухати — нема чого й складати знімок.
                 if self.events.receiver_count() == 0 {
@@ -856,6 +923,36 @@ fn unique_among(desired: &Path, reserved: &[PathBuf]) -> PathBuf {
     }
 }
 
+fn хвилини_зараз() -> u16 {
+    use chrono::Timelike;
+    let t = chrono::Local::now();
+    let total = t.hour().saturating_mul(60).saturating_add(t.minute());
+    u16::try_from(total).unwrap_or(0)
+}
+
+fn черга_спорожніла(live: &HashMap<i64, Live>) -> bool {
+    !live
+        .values()
+        .any(|t| matches!(t.status, Status::Running | Status::Queued))
+}
+
+impl Engine {
+    fn черга_порожня(&self) -> bool {
+        self.live
+            .lock()
+            .map(|g| черга_спорожніла(&g))
+            .unwrap_or(true)
+    }
+
+    fn після_зміни_черги(self: Arc<Self>) {
+        let idle = self.черга_порожня();
+        let action = self.settings().post_action;
+        let me = Arc::clone(&self);
+        self.after
+            .notify(idle, action, move || me.черга_порожня());
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -911,6 +1008,17 @@ mod tests {
         ]));
         assert_eq!(знайти_живе(&live, "https://b"), Some(2));
         assert_eq!(знайти_живе(&live, "https://a"), None);
+    }
+
+    #[test]
+    fn порожня_черга_ігнорує_done_і_paused() {
+        let mut live = HashMap::new();
+        live.insert(1, зразок(1, "https://a", Status::Done));
+        live.insert(2, зразок(2, "https://b", Status::Paused));
+        live.insert(3, зразок(3, "https://c", Status::Failed));
+        assert!(черга_спорожніла(&live));
+        live.insert(4, зразок(4, "https://d", Status::Queued));
+        assert!(!черга_спорожніла(&live));
     }
 
     #[test]

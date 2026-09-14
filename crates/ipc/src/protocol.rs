@@ -89,15 +89,30 @@ pub enum Request {
     /// Чи живе ядро.
     Ping,
 
-    /// Змінити стелю одночасних і ліміт швидкості. Порожні поля — не чіпати.
+    /// Змінити правила ядра. Порожні поля — не чіпати.
+    ///
+    /// Для часу порожній рядок означає «прибрати вікно», а не «лишити як є».
     Configure {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         max_concurrent: Option<u32>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         rate_limit: Option<u64>,
+        /// `none` / `sleep` / `shutdown`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        post_action: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        schedule_from: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        schedule_to: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        quiet_from: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        quiet_to: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        quiet_rate: Option<u64>,
     },
 
-    /// Поточні ліміти.
+    /// Поточні правила ядра.
     Settings,
 }
 
@@ -121,10 +136,22 @@ pub enum Response {
     /// Розкладка частин завдання.
     Details { id: i64, parts: Vec<PartView> },
 
-    /// Поточні ліміти ядра.
+    /// Поточні правила ядра.
     Settings {
         max_concurrent: u32,
         rate_limit: u64,
+        #[serde(default)]
+        post_action: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        schedule_from: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        schedule_to: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        quiet_from: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        quiet_to: Option<String>,
+        #[serde(default)]
+        quiet_rate: u64,
     },
 
     /// Зроблено.
@@ -318,9 +345,43 @@ mod tests {
             Request::Configure {
                 max_concurrent,
                 rate_limit,
+                post_action,
+                schedule_from,
+                schedule_to,
+                quiet_from,
+                quiet_to,
+                quiet_rate,
             } => {
                 assert!(max_concurrent.is_none());
                 assert!(rate_limit.is_none());
+                assert!(post_action.is_none());
+                assert!(schedule_from.is_none());
+                assert!(schedule_to.is_none());
+                assert!(quiet_from.is_none());
+                assert!(quiet_to.is_none());
+                assert!(quiet_rate.is_none());
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn settings_без_нових_полів_десеріалізується() {
+        let back: Response =
+            serde_json::from_str(r#"{"kind":"settings","max_concurrent":3,"rate_limit":0}"#)
+                .unwrap();
+        match back {
+            Response::Settings {
+                max_concurrent,
+                post_action,
+                schedule_from,
+                quiet_rate,
+                ..
+            } => {
+                assert_eq!(max_concurrent, 3);
+                assert!(post_action.is_empty());
+                assert!(schedule_from.is_none());
+                assert_eq!(quiet_rate, 0);
             }
             other => panic!("{other:?}"),
         }

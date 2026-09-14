@@ -5,6 +5,8 @@ using System.Diagnostics;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using Avalonia;
+using Avalonia.Styling;
 using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -65,12 +67,53 @@ public sealed partial class MainViewModel : ObservableObject
     [ObservableProperty]
     private string _rateLimitText = "0";
 
+    /// <summary>0 — нічого, 1 — сон, 2 — вимкнути ПК.</summary>
+    [ObservableProperty]
+    private int _postActionIndex;
+
+    [ObservableProperty]
+    private string _scheduleFromText = "";
+
+    [ObservableProperty]
+    private string _scheduleToText = "";
+
+    [ObservableProperty]
+    private string _quietFromText = "";
+
+    [ObservableProperty]
+    private string _quietToText = "";
+
+    [ObservableProperty]
+    private string _quietRateText = "0";
+
+    /// <summary>
+    /// Тема вікна. Не йде в ядро: IPC і <c>tasks.db</c> про вигляд не знають.
+    /// </summary>
+    [ObservableProperty]
+    private bool _darkTheme = true;
+
     public ObservableCollection<TaskRow> Tasks { get; } = new();
 
     public MainViewModel()
     {
+        DarkTheme = UiPrefs.LoadDark();
+        ApplyTheme(DarkTheme);
         _ = ConnectLoopAsync();
         _ = DetailsLoopAsync();
+    }
+
+    partial void OnDarkThemeChanged(bool value)
+    {
+        ApplyTheme(value);
+        UiPrefs.SaveDark(value);
+    }
+
+    private static void ApplyTheme(bool dark)
+    {
+        if (Application.Current is { } app)
+        {
+            app.RequestedThemeVariant = dark ? ThemeVariant.Dark : ThemeVariant.Light;
+        }
     }
 
     /// <summary>
@@ -367,6 +410,18 @@ public sealed partial class MainViewModel : ObservableObject
                     {
                         RateLimitText = (r / 1024).ToString();
                     }
+
+                    PostActionIndex = resp.PostAction switch
+                    {
+                        "sleep" => 1,
+                        "shutdown" => 2,
+                        _ => 0,
+                    };
+                    ScheduleFromText = resp.ScheduleFrom ?? "";
+                    ScheduleToText = resp.ScheduleTo ?? "";
+                    QuietFromText = resp.QuietFrom ?? "";
+                    QuietToText = resp.QuietTo ?? "";
+                    QuietRateText = ((resp.QuietRate ?? 0) / 1024).ToString();
                 });
             }
         }
@@ -386,8 +441,25 @@ public sealed partial class MainViewModel : ObservableObject
 
         uint? max = uint.TryParse(MaxConcurrentText, out uint n) && n >= 1 ? n : null;
         ulong? rate = ulong.TryParse(RateLimitText, out ulong kb) ? kb * 1024 : null;
+        string after = PostActionIndex switch
+        {
+            1 => "sleep",
+            2 => "shutdown",
+            _ => "none",
+        };
+        ulong? quiet = ulong.TryParse(QuietRateText, out ulong qkb) ? qkb * 1024 : 0;
 
-        Response resp = await _commands.CallAsync(new ConfigureRequest(max, rate), _cts.Token);
+        Response resp = await _commands.CallAsync(
+            new ConfigureRequest(
+                max,
+                rate,
+                after,
+                ScheduleFromText,
+                ScheduleToText,
+                QuietFromText,
+                QuietToText,
+                quiet),
+            _cts.Token);
         Status = resp.IsError
             ? resp.Message ?? "не вдалося застосувати"
             : "налаштування застосовано";

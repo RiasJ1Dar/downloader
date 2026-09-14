@@ -100,7 +100,15 @@ public sealed record SettingsRequest : Request
     public override string Kind => "settings";
 }
 
-public sealed record ConfigureRequest(uint? MaxConcurrent, ulong? RateLimit) : Request
+public sealed record ConfigureRequest(
+    uint? MaxConcurrent,
+    ulong? RateLimit,
+    string? PostAction = null,
+    string? ScheduleFrom = null,
+    string? ScheduleTo = null,
+    string? QuietFrom = null,
+    string? QuietTo = null,
+    ulong? QuietRate = null) : Request
 {
     public override string Kind => "configure";
 }
@@ -143,6 +151,24 @@ public sealed class Response
 
     [JsonPropertyName("rate_limit")]
     public ulong? RateLimit { get; set; }
+
+    [JsonPropertyName("post_action")]
+    public string? PostAction { get; set; }
+
+    [JsonPropertyName("schedule_from")]
+    public string? ScheduleFrom { get; set; }
+
+    [JsonPropertyName("schedule_to")]
+    public string? ScheduleTo { get; set; }
+
+    [JsonPropertyName("quiet_from")]
+    public string? QuietFrom { get; set; }
+
+    [JsonPropertyName("quiet_to")]
+    public string? QuietTo { get; set; }
+
+    [JsonPropertyName("quiet_rate")]
+    public ulong? QuietRate { get; set; }
 
     /// <summary>Чи це відмова.</summary>
     public bool IsError => Kind == "error";

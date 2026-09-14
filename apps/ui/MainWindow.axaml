@@ -229,7 +229,7 @@
         <!-- Рядок стану: кружечок зв'язку плюс останнє повідомлення. Без
              кружечка «з'єднано з ядром» губиться серед інших текстів, а це
              найважливіше, що тут є: без ядра не працює нічого. -->
-        <Grid Grid.Row="3" ColumnDefinitions="*,Auto" Margin="2,10,0,0">
+        <Grid Grid.Row="3" ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto" Margin="2,10,0,0">
             <StackPanel Orientation="Horizontal" Spacing="7">
                 <Ellipse Width="8" Height="8"
                          VerticalAlignment="Center"
@@ -238,6 +238,12 @@
                 <TextBlock Classes="dim"
                            Text="{Binding Status}"
                            TextTrimming="CharacterEllipsis"/>
+                <!-- Тема не залежить від ядра: вікно може бути темним і без нього. -->
+                <ToggleSwitch Margin="16,0,0,0"
+                              IsChecked="{Binding DarkTheme}"
+                              OnContent="темна"
+                              OffContent="світла"
+                              VerticalAlignment="Center"/>
             </StackPanel>
 
             <StackPanel Grid.Column="1"
@@ -249,6 +255,29 @@
                 <TextBlock Classes="label" Text="КБ/с" VerticalAlignment="Center"/>
                 <TextBox Width="64" Text="{Binding RateLimitText}"/>
                 <Button Padding="12,4" Content="Застосувати" Command="{Binding ApplySettingsCommand}"/>
+            </StackPanel>
+
+            <!-- Правила ядра, не вікна: розклад і післядія переживають закриття. -->
+            <StackPanel Grid.Row="1" Grid.Column="1"
+                        Orientation="Horizontal"
+                        Spacing="8"
+                        Margin="0,6,0,0"
+                        IsEnabled="{Binding Connected}">
+                <TextBlock Classes="label" Text="Після черги" VerticalAlignment="Center"/>
+                <ComboBox Width="128" SelectedIndex="{Binding PostActionIndex}">
+                    <ComboBoxItem Content="нічого"/>
+                    <ComboBoxItem Content="сон"/>
+                    <ComboBoxItem Content="вимкнути ПК"/>
+                </ComboBox>
+                <TextBlock Classes="label" Text="Розклад" VerticalAlignment="Center"/>
+                <TextBox Width="52" PlaceholderText="22:00" Text="{Binding ScheduleFromText}"/>
+                <TextBlock Classes="label" Text="–" VerticalAlignment="Center"/>
+                <TextBox Width="52" PlaceholderText="07:00" Text="{Binding ScheduleToText}"/>
+                <TextBlock Classes="label" Text="Ніч КБ/с" VerticalAlignment="Center"/>
+                <TextBox Width="52" Text="{Binding QuietRateText}"/>
+                <TextBox Width="52" PlaceholderText="00:00" Text="{Binding QuietFromText}"/>
+                <TextBlock Classes="label" Text="–" VerticalAlignment="Center"/>
+                <TextBox Width="52" PlaceholderText="07:00" Text="{Binding QuietToText}"/>
             </StackPanel>
         </Grid>
     </Grid>

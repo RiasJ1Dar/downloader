@@ -9,6 +9,7 @@
 //! * [`paths`] — довгі шляхи й унікальні імена.
 //! * [`clipboard`] — текст буфера обміну (`CF_UNICODETEXT`).
 //! * [`disk`] — вільне місце на томі призначення до старту качання.
+//! * [`power`] — сон і вимкнення ПК після порожньої черги.
 //!
 //! Крейт збирається й на інших системах: те, чого там немає, стає чесною
 //! заглушкою, а не помилкою збірки. Це та межа, яку тримаємо зараз, щоб
@@ -19,9 +20,11 @@ pub mod disk;
 pub mod motw;
 pub mod names;
 pub mod paths;
+pub mod power;
 
 pub use clipboard::{ClipboardError, текст_буфера};
 pub use disk::{DiskError, вільні_байти, вистачить_місця};
+pub use power::{PowerError, shutdown, sleep};
 pub use motw::{Zone, is_marked_internet, mark};
 pub use names::{extension_for_mime, sanitize, з_розширенням_mime};
 pub use paths::{long_path, unique_path};

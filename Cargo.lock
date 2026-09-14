@@ -697,6 +697,7 @@ name = "downloader-core-service"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "clap",
  "downloader-core",
  "downloader-i18n",

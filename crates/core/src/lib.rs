@@ -9,19 +9,23 @@
 
 pub mod error;
 pub mod file;
+pub mod post_action;
 pub mod protocol;
 pub mod rate;
+pub mod schedule;
 pub mod segments;
 pub mod state;
 pub mod store;
 
 pub use error::{Error, Result};
 pub use file::SparseFile;
+pub use post_action::PostAction;
 pub use protocol::{Protocol, Registry};
 pub use rate::{Allowance, RateLimiter};
+pub use schedule::{ClockWindow, format_hhmm, in_window, parse_hhmm};
 pub use segments::{Segment, SegmentId, SegmentTable};
 pub use state::{DownloadState, StateMismatch};
-pub use store::{Status, Store, Task};
+pub use store::{Settings, SettingsPatch, Status, Store, Task};
 
 /// Версія ядра — нею вітаються клієнти IPC при рукостисканні.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

@@ -167,20 +167,44 @@ async fn dispatch(req: Request, engine: &Arc<Engine>) -> Response {
         },
 
         Request::Settings => {
-            let (max_concurrent, rate_limit) = engine.settings();
+            let s = engine.settings();
             Response::Settings {
-                max_concurrent,
-                rate_limit,
+                max_concurrent: s.max_concurrent,
+                rate_limit: s.rate_limit,
+                post_action: s.post_action.as_str().to_owned(),
+                schedule_from: s.schedule_from.map(downloader_core::format_hhmm),
+                schedule_to: s.schedule_to.map(downloader_core::format_hhmm),
+                quiet_from: s.quiet_from.map(downloader_core::format_hhmm),
+                quiet_to: s.quiet_to.map(downloader_core::format_hhmm),
+                quiet_rate: s.quiet_rate,
             }
         }
 
         Request::Configure {
             max_concurrent,
             rate_limit,
-        } => {
-            engine.configure(max_concurrent, rate_limit);
-            Response::Ok
-        }
+            post_action,
+            schedule_from,
+            schedule_to,
+            quiet_from,
+            quiet_to,
+            quiet_rate,
+        } => match engine.configure(downloader_core::SettingsPatch {
+            max_concurrent,
+            rate_limit,
+            post_action,
+            schedule_from,
+            schedule_to,
+            quiet_from,
+            quiet_to,
+            quiet_rate,
+        }) {
+            Ok(()) => Response::Ok,
+            Err(e) => Response::Error {
+                code: ErrorCode::InvalidState,
+                message: e.to_string(),
+            },
+        },
 
         Request::Hello { .. } => Response::Error {
             code: ErrorCode::InvalidState,

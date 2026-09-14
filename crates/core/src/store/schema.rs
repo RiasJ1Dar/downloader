@@ -26,7 +26,7 @@ use crate::error::{Error, Result};
 ///
 /// Зростає з кожною несумісною зміною. База новішої версії відкриттю не
 /// підлягає: старша програма не знає про нові поля й тихо їх загубить.
-pub const SCHEMA_VERSION: i64 = 1;
+pub const SCHEMA_VERSION: i64 = 2;
 
 /// Налаштування з'єднання.
 ///
@@ -72,6 +72,9 @@ pub fn migrate(conn: &Connection) -> Result<()> {
 
     if current < 1 {
         conn.execute_batch(V1).map_err(db_err)?;
+    }
+    if current < 2 {
+        conn.execute_batch(V2).map_err(db_err)?;
     }
 
     conn.pragma_update(None, "user_version", SCHEMA_VERSION)
@@ -141,3 +144,21 @@ CREATE INDEX IF NOT EXISTS idx_task_status  ON task(status);
 CREATE INDEX IF NOT EXISTS idx_file_task    ON file(task_id);
 CREATE INDEX IF NOT EXISTS idx_segment_file ON segment(file_id);
 "#;
+
+/// Налаштування ядра — ключ/значення, щоб не плодити колонки на кожне поле.
+///
+/// Живуть у базі, а не у вікні: закрите вікно не має губити стелю, ліміт,
+/// розклад і післядію. Черга качає далі з тими самими правилами.
+const V2: &str = r#"
+CREATE TABLE IF NOT EXISTS setting (
+    key    TEXT PRIMARY KEY,
+    value  TEXT NOT NULL
+);
+"#;
+
+#[cfg(test)]
+pub(crate) fn seed_v1(conn: &Connection) -> Result<()> {
+    conn.execute_batch(V1).map_err(db_err)?;
+    conn.pragma_update(None, "user_version", 1).map_err(db_err)?;
+    Ok(())
+}

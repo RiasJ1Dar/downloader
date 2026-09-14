@@ -156,6 +156,43 @@ enum Command {
 
     /// Стежити за прогресом, доки не натиснуто Ctrl+C.
     Watch,
+
+    /// Показати правила ядра: черга, ліміт, розклад, післядія.
+    Settings,
+
+    /// Змінити правила ядра. Порожній прапорець — не чіпати те поле.
+    Configure {
+        /// Скільки завдань качати одночасно.
+        #[arg(long)]
+        max: Option<u32>,
+        /// Стеля швидкості в кілобайтах за секунду. 0 — без обмеження.
+        #[arg(long)]
+        rate_kb: Option<u64>,
+        /// Після порожньої черги: `none`, `sleep` або `shutdown`.
+        #[arg(long)]
+        after: Option<String>,
+        /// Початок вікна старту, `ГГ:ХХ`. Порожньо разом із `--to` прибирає розклад.
+        #[arg(long)]
+        from: Option<String>,
+        /// Кінець вікна старту.
+        #[arg(long)]
+        to: Option<String>,
+        /// Початок нічного ліміту.
+        #[arg(long)]
+        quiet_from: Option<String>,
+        /// Кінець нічного ліміту.
+        #[arg(long)]
+        quiet_to: Option<String>,
+        /// Нічний ліміт у КБ/с. 0 — вимкнути нічний профіль.
+        #[arg(long)]
+        quiet_kb: Option<u64>,
+        /// Прибрати розклад (качати завжди).
+        #[arg(long)]
+        clear_schedule: bool,
+        /// Прибрати нічний профіль.
+        #[arg(long)]
+        clear_quiet: bool,
+    },
 }
 
 #[tokio::main]
@@ -369,6 +406,102 @@ async fn main() -> Result<()> {
             }
 
             println!("{}", t("core-closed"));
+        }
+
+        Command::Settings => {
+            let mut core = client::Client::connect().await?;
+            match core.call(&Request::Settings).await? {
+                Response::Settings {
+                    max_concurrent,
+                    rate_limit,
+                    post_action,
+                    schedule_from,
+                    schedule_to,
+                    quiet_from,
+                    quiet_to,
+                    quiet_rate,
+                } => {
+                    println!(
+                        "{}: {max_concurrent}",
+                        t("set-max")
+                    );
+                    if rate_limit == 0 {
+                        println!("{}: {}", t("set-rate"), t("set-unlimited"));
+                    } else {
+                        println!("{}: {} {}/с", t("set-rate"), rate_limit / 1024, t("kb"));
+                    }
+                    println!("{}: {}", t("set-after"), післядія_текст(&post_action));
+                    match (schedule_from, schedule_to) {
+                        (Some(a), Some(b)) => {
+                            println!("{}: {a}–{b}", t("set-schedule"))
+                        }
+                        _ => println!("{}: {}", t("set-schedule"), t("set-always")),
+                    }
+                    match (quiet_from, quiet_to) {
+                        (Some(a), Some(b)) if quiet_rate > 0 => println!(
+                            "{}: {} {}/с {a}–{b}",
+                            t("set-quiet"),
+                            quiet_rate / 1024,
+                            t("kb")
+                        ),
+                        _ => println!("{}: {}", t("set-quiet"), t("none")),
+                    }
+                }
+                Response::Error { message, .. } => anyhow::bail!(message),
+                other => anyhow::bail!("несподівана відповідь ядра: {other:?}"),
+            }
+        }
+
+        Command::Configure {
+            max,
+            rate_kb,
+            after,
+            from,
+            to,
+            quiet_from,
+            quiet_to,
+            quiet_kb,
+            clear_schedule,
+            clear_quiet,
+        } => {
+            let mut core = client::Client::connect().await?;
+            let schedule_from = if clear_schedule {
+                Some(String::new())
+            } else {
+                from
+            };
+            let schedule_to = if clear_schedule {
+                Some(String::new())
+            } else {
+                to
+            };
+            let quiet_from = if clear_quiet {
+                Some(String::new())
+            } else {
+                quiet_from
+            };
+            let quiet_to = if clear_quiet {
+                Some(String::new())
+            } else {
+                quiet_to
+            };
+            let quiet_rate = if clear_quiet {
+                Some(0)
+            } else {
+                quiet_kb.map(|kb| kb.saturating_mul(1024))
+            };
+            core.call_ok(&Request::Configure {
+                max_concurrent: max,
+                rate_limit: rate_kb.map(|kb| kb.saturating_mul(1024)),
+                post_action: after,
+                schedule_from,
+                schedule_to,
+                quiet_from,
+                quiet_to,
+                quiet_rate,
+            })
+            .await?;
+            println!("{}", t("set-applied"));
         }
 
         Command::Probe { url } => {
@@ -732,6 +865,14 @@ fn смужка(частка: f64) -> String {
     format!("[{}{}]", "█".repeat(повних), "·".repeat(ШИРИНА - повних))
 }
 
+fn післядія_текст(raw: &str) -> String {
+    match raw {
+        "sleep" => t("set-sleep"),
+        "shutdown" => t("set-shutdown"),
+        _ => t("none"),
+    }
+}
+
 fn format_size(bytes: u64) -> String {
     const ОДИНИЦІ: [&str; 5] = ["Б", "КБ", "МБ", "ГБ", "ТБ"];
     let mut value = bytes as f64;
@@ -869,6 +1010,48 @@ mod tests {
                 assert_eq!(referer.as_deref(), Some("http://ex.com/page"));
             }
             other => panic!("не get --cookie: {other:?}"),
+        }
+
+        match Cli::try_parse_from(["dl", "settings"]).expect("settings") {
+            Cli {
+                command: Command::Settings,
+                ..
+            } => {}
+            other => panic!("не settings: {other:?}"),
+        }
+
+        match Cli::try_parse_from([
+            "dl",
+            "configure",
+            "--max",
+            "5",
+            "--after",
+            "sleep",
+            "--from",
+            "22:00",
+            "--to",
+            "07:00",
+        ])
+        .expect("configure")
+        {
+            Cli {
+                command: Command::Configure {
+                    max,
+                    after,
+                    from,
+                    to,
+                    clear_schedule,
+                    ..
+                },
+                ..
+            } => {
+                assert_eq!(max, Some(5));
+                assert_eq!(after.as_deref(), Some("sleep"));
+                assert_eq!(from.as_deref(), Some("22:00"));
+                assert_eq!(to.as_deref(), Some("07:00"));
+                assert!(!clear_schedule);
+            }
+            other => panic!("не configure: {other:?}"),
         }
     }
 

@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Media;
+using Avalonia.Styling;
 using Downloader.Ui.Ipc;
 
 namespace Downloader.Ui.Controls;
@@ -176,7 +177,13 @@ public sealed class SegmentBar : Control
         IReadOnlyList<PartView> parts,
         ulong total)
     {
-        var pen = new Pen(new SolidColorBrush(Color.FromArgb(0x55, 0, 0, 0)), 1);
+        bool dark = Application.Current?.ActualThemeVariant == ThemeVariant.Dark;
+        var pen = new Pen(
+            new SolidColorBrush(
+                dark
+                    ? Color.FromArgb(0x66, 0xFF, 0xFF, 0xFF)
+                    : Color.FromArgb(0x55, 0, 0, 0)),
+            1);
 
         foreach (PartView part in parts)
         {
