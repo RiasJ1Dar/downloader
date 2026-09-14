@@ -12,6 +12,8 @@ use tokio::sync::watch;
 use tray_icon::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
 use tray_icon::{Icon, TrayIconBuilder, TrayIconEvent};
 
+use downloader_i18n::t;
+
 use crate::clipboard_watch::витягти_http;
 use crate::engine::Engine;
 
@@ -40,9 +42,9 @@ fn цикл(
     tx: watch::Sender<bool>,
     rt: tokio::runtime::Handle,
 ) -> anyhow::Result<()> {
-    let відкрити = MenuItem::with_id("open", "Відкрити теку завантажень", true, None);
-    let буфер = MenuItem::with_id("clip", "Додати з буфера обміну", true, None);
-    let вихід = MenuItem::with_id("quit", "Вийти", true, None);
+    let відкрити = MenuItem::with_id("open", t("tray-open"), true, None);
+    let буфер = MenuItem::with_id("clip", t("tray-clip"), true, None);
+    let вихід = MenuItem::with_id("quit", t("tray-quit"), true, None);
     let menu = Menu::new();
     menu.append(&відкрити)?;
     menu.append(&буфер)?;
@@ -52,7 +54,7 @@ fn цикл(
     let icon = іконка()?;
     let _tray = TrayIconBuilder::new()
         .with_menu(Box::new(menu))
-        .with_tooltip("Downloader")
+        .with_tooltip(t("tray-tooltip"))
         .with_icon(icon)
         .build()?;
 

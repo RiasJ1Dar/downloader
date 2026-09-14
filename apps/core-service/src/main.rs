@@ -23,6 +23,7 @@ use std::sync::Arc;
 
 use anyhow::Context;
 use clap::Parser;
+use downloader_i18n as i18n;
 use downloader_ipc::transport::Listener;
 
 #[derive(Parser)]
@@ -44,6 +45,10 @@ struct Cli {
     /// у звичайній роботі не задається.
     #[arg(long)]
     pipe: Option<String>,
+
+    /// Мова: `uk` або `en`. Російська ОС → українська.
+    #[arg(long)]
+    lang: Option<String>,
 }
 
 #[tokio::main]
@@ -56,6 +61,7 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let cli = Cli::parse();
+    i18n::init(cli.lang.as_deref());
     let ставити_nmhost = cli.pipe.is_none();
 
     let data_dir = cli

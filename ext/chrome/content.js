@@ -1,6 +1,10 @@
 // Кнопка в Shadow DOM: CSS сторінки її не вбиває (урок DLMan/оверлеїв).
 (function () {
-  const BTN = "Завантажити";
+  const BTN =
+    (typeof chrome !== "undefined" &&
+      chrome.i18n &&
+      chrome.i18n.getMessage("btnDownload")) ||
+    "Завантажити";
 
   function attach(video) {
     if (video.dataset.dlBtn) return;

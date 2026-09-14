@@ -1,0 +1,10 @@
+{
+  "extName": { "message": "Downloader" },
+  "extDesc": {
+    "message": "Перехоплює завантаження і віддає ядру Downloader. Без локального HTTP-порту."
+  },
+  "btnDownload": { "message": "Завантажити" },
+  "ctxLink": { "message": "Завантажити посилання в Downloader" },
+  "ctxPage": { "message": "Завантажити сторінку в Downloader" },
+  "ctxMedia": { "message": "Завантажити медіа в Downloader" }
+}

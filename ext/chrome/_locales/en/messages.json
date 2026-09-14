@@ -1,0 +1,10 @@
+{
+  "extName": { "message": "Downloader" },
+  "extDesc": {
+    "message": "Sends downloads to the Downloader core. No local HTTP port."
+  },
+  "btnDownload": { "message": "Download" },
+  "ctxLink": { "message": "Download link with Downloader" },
+  "ctxPage": { "message": "Download this page with Downloader" },
+  "ctxMedia": { "message": "Download media with Downloader" }
+}

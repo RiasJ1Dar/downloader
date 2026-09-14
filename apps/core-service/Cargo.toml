@@ -18,6 +18,7 @@ downloader-proto-hls.workspace = true
 downloader-proto-dash.workspace = true
 downloader-proto-ytdlp.workspace = true
 downloader-winutil.workspace = true
+downloader-i18n.workspace = true
 anyhow.workspace = true
 clap.workspace = true
 reqwest.workspace = true

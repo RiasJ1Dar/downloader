@@ -1,4 +1,8 @@
 cli-about = Download manager: segmented transfers with resume
+tray-open = Open downloads folder
+tray-clip = Add from clipboard
+tray-quit = Quit
+tray-tooltip = Downloader
 no-tasks = no tasks
 watching = watching the core, Ctrl+C to quit
 core-closed = core closed the connection

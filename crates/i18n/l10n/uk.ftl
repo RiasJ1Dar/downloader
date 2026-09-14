@@ -1,4 +1,8 @@
 cli-about = Менеджер завантажень: сегментоване качання з докачуванням
+tray-open = Відкрити теку завантажень
+tray-clip = Додати з буфера обміну
+tray-quit = Вийти
+tray-tooltip = Downloader
 no-tasks = завдань немає
 watching = стежу за ядром, Ctrl+C щоб вийти
 core-closed = ядро закрило з'єднання

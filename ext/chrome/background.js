@@ -51,6 +51,35 @@ chrome.runtime.onMessage.addListener((msg, sender) => {
 });
 
 
+chrome.runtime.onInstalled.addListener(() => {
+  chrome.contextMenus.removeAll(() => {
+    chrome.contextMenus.create({
+      id: "dl-link",
+      title: chrome.i18n.getMessage("ctxLink"),
+      contexts: ["link"],
+    });
+    chrome.contextMenus.create({
+      id: "dl-page",
+      title: chrome.i18n.getMessage("ctxPage"),
+      contexts: ["page"],
+    });
+    chrome.contextMenus.create({
+      id: "dl-media",
+      title: chrome.i18n.getMessage("ctxMedia"),
+      contexts: ["video", "audio"],
+    });
+  });
+});
+
+chrome.contextMenus.onClicked.addListener((info, tab) => {
+  const page = (tab && tab.url) || info.pageUrl || "";
+  let target = page;
+  if (info.menuItemId === "dl-link" && info.linkUrl) target = info.linkUrl;
+  if (info.menuItemId === "dl-media" && info.srcUrl) target = info.srcUrl;
+  if (!target.startsWith("http://") && !target.startsWith("https://")) return;
+  withCookies(page || target, page, target);
+});
+
 chrome.downloads.onCreated.addListener((item) => {
   const url = item.url || "";
   if (!url.startsWith("http://") && !url.startsWith("https://")) return;
