@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use async_trait::async_trait;
-use dash_mpd::{AdaptationSet, Period, Representation, SegmentList};
+use dash_mpd::{AdaptationSet, Period, Representation, SegmentList, SegmentTemplate};
 use downloader_core::error::{Error, Result};
 use downloader_core::protocol::{
     Variant,
@@ -287,7 +287,20 @@ fn розібрати_mpd(xml: &str, source: &str) -> Result<Vec<Якість>> 
         .mpdtype
         .as_deref()
         .is_some_and(|t| t.eq_ignore_ascii_case("dynamic"));
-    let mut якості = зібрати_якості(&mpd, source)?;
+    // ⚠️ Для динамічного MPD будь-яка невдача збирання означає одне: це
+    // live, і качати його ми не вміємо. Без цієї гілки людина читала б
+    // «MPD не називає тривалості» — правду, яка нічого не пояснює, бо
+    // тривалості в live і не буває.
+    let mut якості = match зібрати_якості(&mpd, source) {
+        Ok(q) => q,
+        Err(_) if dynamic => {
+            return Err(Error::Store(
+                "DASH live / динамічний MPD без фіксованого списку сегментів — не качаємо"
+                    .to_owned(),
+            ));
+        }
+        Err(e) => return Err(e),
+    };
     if якості.is_empty() {
         if dynamic {
             return Err(Error::Store(
@@ -353,10 +366,15 @@ fn зібрати_якості(mpd: &dash_mpd::MPD, source: &str) -> Result<Vec<
             )?;
             for rep in &adaptation.representations {
                 let rep_base = база(&aset_base, rep.BaseURL.first().map(|b| b.base.as_str()))?;
-                let Some(list) = сегментний_список(rep, adaptation, period) else {
+                let Some(джерело) = джерело_сегментів(rep, adaptation, period) else {
                     continue;
                 };
-                let сегменти = сегменти_списку(list, &rep_base)?;
+                let сегменти = match джерело {
+                    Джерело::Список(list) => сегменти_списку(list, &rep_base)?,
+                    Джерело::Шаблон(t) => {
+                        сегменти_шаблону(t, rep, &rep_base, тривалість(period, mpd))?
+                    }
+                };
                 if сегменти.is_empty() {
                     continue;
                 }
@@ -373,18 +391,290 @@ fn зібрати_якості(mpd: &dash_mpd::MPD, source: &str) -> Result<Vec<
             }
         }
     }
+    розвести_однакові(&mut out);
     Ok(out)
 }
 
-fn сегментний_список<'a>(
+/// Розвести якості з однаковим іменем.
+///
+/// ⚠️ Одна висота ще не означає одну якість: у живих MPD трапляються два
+/// representation по 360p із різним бітрейтом. Поки імена збігались, це
+/// давало два однакові рядки в переліку — людина не знала, що обирає, — а
+/// файли перезаписували б одне одного.
+fn розвести_однакові(якості: &mut [Якість]) {
+    let mut скільки: std::collections::HashMap<&str, usize> =
+        std::collections::HashMap::new();
+
+    for я in якості.iter() {
+        *скільки.entry(я.name.as_str()).or_insert(0) += 1;
+    }
+
+    let повтори: std::collections::HashSet<String> = скільки
+        .into_iter()
+        .filter(|(_, n)| *n > 1)
+        .map(|(імʼя, _)| імʼя.to_owned())
+        .collect();
+
+    if повтори.is_empty() {
+        return;
+    }
+
+    for я in якості.iter_mut() {
+        if !повтори.contains(&я.name) {
+            continue;
+        }
+
+        // Бітрейт — саме те, чим вони й різняться.
+        let кбіт = я.bandwidth / 1000;
+        я.name = match я.name.rsplit_once('.') {
+            Some((основа, розширення)) => format!("{основа}-{кбіт}k.{розширення}"),
+            None => format!("{}-{кбіт}k", я.name),
+        };
+    }
+}
+
+/// Звідки беруться адреси сегментів.
+///
+/// DASH має два способи їх описати, і обидва однаково законні. Модуль довго
+/// розумів лише перший — і мовчки відмовлявся качати більшість справжніх
+/// потоків, бо в світі переважає другий.
+enum Джерело<'a> {
+    /// Готовий перелік адрес.
+    Список(&'a SegmentList),
+    /// Шаблон, з якого адреси треба зібрати.
+    Шаблон(&'a SegmentTemplate),
+}
+
+/// Найближчий опис сегментів: representation → adaptation set → period.
+///
+/// Порядок саме такий, бо в DASH ближчий рівень перекриває дальший.
+fn джерело_сегментів<'a>(
     r: &'a Representation,
     a: &'a AdaptationSet,
     p: &'a Period,
-) -> Option<&'a SegmentList> {
-    r.SegmentList
+) -> Option<Джерело<'a>> {
+    if let Some(l) = r
+        .SegmentList
         .as_ref()
         .or(a.SegmentList.as_ref())
         .or(p.SegmentList.as_ref())
+    {
+        return Some(Джерело::Список(l));
+    }
+
+    r.SegmentTemplate
+        .as_ref()
+        .or(a.SegmentTemplate.as_ref())
+        .or(p.SegmentTemplate.as_ref())
+        .map(Джерело::Шаблон)
+}
+
+/// Скільки триває період: його власна тривалість або всього MPD.
+fn тривалість(p: &Period, mpd: &dash_mpd::MPD) -> Option<f64> {
+    p.duration
+        .or(mpd.mediaPresentationDuration)
+        .map(|d| d.as_secs_f64())
+}
+
+/// Зібрати адреси сегментів із шаблону.
+///
+/// Два режими, обидва зустрічаються в живих потоках:
+///
+/// * `SegmentTimeline` — точний перелік відрізків; рахувати нічого не треба,
+///   лише розгорнути повтори;
+/// * `duration` з `timescale` — сегменти однакової довжини, і їхню кількість
+///   доводиться виводити з тривалості періоду.
+fn сегменти_шаблону(
+    t: &SegmentTemplate,
+    rep: &Representation,
+    base: &str,
+    тривалість_періоду: Option<f64>,
+) -> Result<Vec<String>> {
+    let id = rep.id.clone().unwrap_or_default();
+    let bandwidth = rep.bandwidth.unwrap_or(0);
+    let timescale = t.timescale.unwrap_or(1).max(1);
+    let перший = t.startNumber.unwrap_or(1);
+
+    let mut out = Vec::new();
+
+    // Init-сегмент: у ньому немає ні номера, ні часу — лише сталі підстановки.
+    if let Some(init) = &t.initialization {
+        out.push(абсолютний(
+            base,
+            &підставити(init, &id, bandwidth, None, None),
+        )?);
+    }
+
+    let Some(media) = &t.media else {
+        return Err(Error::Store(
+            "SegmentTemplate без media: адреси сегментів нізвідки взяти".to_owned(),
+        ));
+    };
+
+    match &t.SegmentTimeline {
+        Some(timeline) => {
+            let mut час = 0u64;
+            let mut номер = перший;
+
+            for s in &timeline.segments {
+                // Час з'являється там, де відлік починається не з нуля або
+                // де в потоці є розрив.
+                час = s.t.unwrap_or(час);
+
+                // Повтори — це **додаткові** сегменти, а не загальна їх
+                // кількість. Від'ємне значення означає «до кінця періоду».
+                let повторів = match s.r {
+                    None => 0,
+                    Some(r) if r >= 0 => u64::try_from(r).unwrap_or(0),
+                    Some(_) => решта_періоду(тривалість_періоду, timescale, час, s.d),
+                };
+
+                for _ in 0..=повторів {
+                    out.push(абсолютний(
+                        base,
+                        &підставити(media, &id, bandwidth, Some(номер), Some(час)),
+                    )?);
+                    час = час.saturating_add(s.d);
+                    номер = номер.saturating_add(1);
+                }
+            }
+        }
+        None => {
+            let Some(duration) = t.duration else {
+                return Err(Error::Store(
+                    "SegmentTemplate без SegmentTimeline і без duration: довжину сегмента нізвідки взяти".to_owned(),
+                ));
+            };
+
+            let Some(секунд) = тривалість_періоду else {
+                return Err(Error::Store(
+                    "MPD не називає тривалості, а сегменти описані лише довжиною — скільки їх, невідомо".to_owned(),
+                ));
+            };
+
+            let довжина = duration / timescale as f64;
+            if довжина <= 0.0 {
+                return Err(Error::Store(
+                    "SegmentTemplate із нульовою довжиною сегмента".to_owned(),
+                ));
+            }
+
+            // Останній сегмент майже завжди неповний — округлюємо вгору,
+            // інакше хвіст відео просто не завантажиться.
+            let скільки = (секунд / довжина).ceil().max(0.0) as u64;
+            let останній = t
+                .endNumber
+                .unwrap_or_else(|| перший.saturating_add(скільки).saturating_sub(1));
+
+            for номер in перший..=останній {
+                out.push(абсолютний(
+                    base,
+                    &підставити(media, &id, bandwidth, Some(номер), None),
+                )?);
+            }
+        }
+    }
+
+    Ok(out)
+}
+
+/// Скільки разів відрізок такої довжини влізе до кінця періоду.
+fn решта_періоду(
+    тривалість_періоду: Option<f64>,
+    timescale: u64,
+    від: u64,
+    довжина: u64,
+) -> u64 {
+    let (Some(секунд), true) = (тривалість_періоду, довжина > 0) else {
+        return 0;
+    };
+
+    let усього = секунд * timescale as f64;
+    let лишилось = усього - від as f64;
+    if лишилось <= 0.0 {
+        return 0;
+    }
+
+    ((лишилось / довжина as f64).ceil() as u64).saturating_sub(1)
+}
+
+/// Підставити значення у шаблон адреси.
+///
+/// ⚠️ Подвоєний долар — це літеральний долар, а не початок підстановки.
+/// Пропустити цей випадок означає зіпсувати адреси там, де долар є частиною
+/// імені файла.
+///
+/// Ширина поля (`Number%05d`) трапляється часто: сервери люблять вирівняні
+/// імена на кшталт `seg-00042.m4s`.
+fn підставити(
+    шаблон: &str,
+    id: &str,
+    bandwidth: u64,
+    номер: Option<u64>,
+    час: Option<u64>,
+) -> String {
+    let mut out = String::with_capacity(шаблон.len());
+    let mut решта = шаблон;
+
+    while let Some(i) = решта.find('$') {
+        out.push_str(&решта[..i]);
+        let після = &решта[i + 1..];
+
+        if let Some(хвіст) = після.strip_prefix('$') {
+            out.push('$');
+            решта = хвіст;
+            continue;
+        }
+
+        let Some(j) = після.find('$') else {
+            // Незакритий долар — лишаємо як є: псувати адресу здогадкою гірше.
+            out.push('$');
+            out.push_str(після);
+            return out;
+        };
+
+        let (імʼя, формат) = розділити_формат(&після[..j]);
+        match імʼя {
+            "RepresentationID" => out.push_str(id),
+            "Bandwidth" => out.push_str(&число(bandwidth, формат)),
+            "Number" => out.push_str(&число(номер.unwrap_or(0), формат)),
+            "Time" => out.push_str(&число(час.unwrap_or(0), формат)),
+            інше => {
+                // Невідома підстановка: лишаємо дослівно, щоб проблема була
+                // видима в адресі, а не замаскована порожнім місцем.
+                out.push('$');
+                out.push_str(інше);
+                out.push('$');
+            }
+        }
+
+        решта = &після[j + 1..];
+    }
+
+    out.push_str(решта);
+    out
+}
+
+/// `Number%05d` дає ім'я `Number` і ширину 5.
+fn розділити_формат(тіло: &str) -> (&str, Option<usize>) {
+    let Some((імʼя, хвіст)) = тіло.split_once('%') else {
+        return (тіло, None);
+    };
+
+    let ширина = хвіст
+        .trim_start_matches('0')
+        .trim_end_matches(['d', 'u'])
+        .parse::<usize>()
+        .ok();
+
+    (імʼя, ширина)
+}
+
+fn число(v: u64, ширина: Option<usize>) -> String {
+    match ширина {
+        Some(w) => format!("{v:0w$}"),
+        None => v.to_string(),
+    }
 }
 
 fn сегменти_списку(list: &SegmentList, base: &str) -> Result<Vec<String>> {
@@ -572,6 +862,137 @@ mod tests {
 
     impl ProgressSink for Німий {
         fn report(&self, _: Progress) {}
+    }
+
+    /// Шаблон із порожніми полями, які тест заповнює сам.
+    fn шаблон() -> SegmentTemplate {
+        SegmentTemplate {
+            media: Some("seg-$Number%05d$.m4s".to_owned()),
+            initialization: Some("init-$RepresentationID$.mp4".to_owned()),
+            timescale: Some(1000),
+            ..SegmentTemplate::default()
+        }
+    }
+
+    fn представлення() -> Representation {
+        Representation {
+            id: Some("v0".to_owned()),
+            bandwidth: Some(800_000),
+            ..Representation::default()
+        }
+    }
+
+    #[test]
+    fn підстановки_розуміють_номер_час_і_ширину() {
+        let вийшло = підставити(
+            "$RepresentationID$/$Bandwidth$/$Number%05d$/$Time$.m4s",
+            "v0",
+            800_000,
+            Some(42),
+            Some(12_345),
+        );
+
+        assert_eq!(вийшло, "v0/800000/00042/12345.m4s");
+    }
+
+    /// ⚠️ Подвоєний долар — літеральний символ, а не початок підстановки.
+    /// Пропустити це означає зіпсувати адреси, де долар є в імені файла.
+    #[test]
+    fn подвоєний_долар_лишається_символом() {
+        let вийшло = підставити("a$$b-$Number$.ts", "v0", 0, Some(7), None);
+        assert_eq!(вийшло, "a$b-7.ts");
+    }
+
+    /// Невідому підстановку лишаємо дослівно: видима дивна адреса краща за
+    /// тихо з'їдений шматок шляху.
+    #[test]
+    fn невідома_підстановка_лишається_видимою() {
+        let вийшло = підставити("x-$Vигадка$-$Number$.ts", "v0", 0, Some(1), None);
+        assert!(вийшло.contains("$Vигадка$"), "{вийшло}");
+    }
+
+    #[test]
+    fn незакритий_долар_не_псує_адресу() {
+        let вийшло = підставити("seg-$Number.ts", "v0", 0, Some(3), None);
+        assert_eq!(вийшло, "seg-$Number.ts");
+    }
+
+    /// Сегменти однакової довжини: кількість виводиться з тривалості.
+    ///
+    /// ⚠️ Останній сегмент майже завжди неповний, тому округлення **вгору**:
+    /// інакше хвіст відео не завантажився б, а помилки не було б.
+    #[test]
+    fn duration_округлює_кількість_угору() {
+        let mut t = шаблон();
+        t.duration = Some(4000.0); // 4 секунди при timescale 1000
+
+        let rep = представлення();
+        // 10 секунд → два повні сегменти й один неповний.
+        let out = сегменти_шаблону(&t, &rep, "https://e.com/v/", Some(10.0))
+            .unwrap_or_default();
+
+        assert_eq!(out.len(), 1 + 3, "init плюс три сегменти: {out:?}");
+        assert!(out[0].ends_with("init-v0.mp4"), "init має бути першим: {out:?}");
+        assert!(out[1].ends_with("seg-00001.m4s"), "{out:?}");
+        assert!(out[3].ends_with("seg-00003.m4s"), "{out:?}");
+    }
+
+    /// `r` — це **додаткові** повтори, а не загальна кількість.
+    #[test]
+    fn timeline_розгортає_повтори_і_веде_час() {
+        let mut t = шаблон();
+        t.media = Some("seg-$Time$.m4s".to_owned());
+        t.SegmentTimeline = Some(dash_mpd::SegmentTimeline {
+            segments: vec![dash_mpd::S {
+                t: Some(0),
+                d: 1000,
+                r: Some(2),
+                ..dash_mpd::S::default()
+            }],
+        });
+
+        let rep = представлення();
+        let out = сегменти_шаблону(&t, &rep, "https://e.com/v/", Some(3.0))
+            .unwrap_or_default();
+
+        assert_eq!(out.len(), 1 + 3, "r=2 означає три сегменти: {out:?}");
+        assert!(out[1].ends_with("seg-0.m4s"), "{out:?}");
+        assert!(out[2].ends_with("seg-1000.m4s"), "час має накопичуватись: {out:?}");
+        assert!(out[3].ends_with("seg-2000.m4s"), "{out:?}");
+    }
+
+    /// Без тривалості порахувати кількість неможливо — і про це треба
+    /// сказати, а не мовчки віддати порожній список.
+    #[test]
+    fn без_тривалості_чесна_відмова() {
+        let mut t = шаблон();
+        t.duration = Some(4000.0);
+
+        let вийшло = сегменти_шаблону(&t, &представлення(), "https://e.com/v/", None);
+        assert!(вийшло.is_err(), "мала бути відмова");
+    }
+
+    /// ⚠️ Одна висота — ще не одна якість.
+    ///
+    /// У живому MPD (akamaized.net, Big Buck Bunny) два representation по
+    /// 360p із різним бітрейтом. Поки імена збігались, перелік показував два
+    /// однакові рядки — людина не знала, що обирає, — а файли перезаписували б
+    /// одне одного.
+    #[test]
+    fn однакові_висоти_розводяться_бітрейтом() {
+        let mut якості = vec![
+            Якість { name: "360p.mp4".to_owned(), bandwidth: 1_254_000, height: Some(360), звук: false, сегменти: vec![] },
+            Якість { name: "360p.mp4".to_owned(), bandwidth: 1_013_000, height: Some(360), звук: false, сегменти: vec![] },
+            Якість { name: "720p.mp4".to_owned(), bandwidth: 5_000_000, height: Some(720), звук: false, сегменти: vec![] },
+        ];
+
+        розвести_однакові(&mut якості);
+
+        let імена: Vec<&str> = якості.iter().map(|я| я.name.as_str()).collect();
+        assert_eq!(імена, vec!["360p-1254k.mp4", "360p-1013k.mp4", "720p.mp4"]);
+
+        let унікальні: std::collections::BTreeSet<&&str> = імена.iter().collect();
+        assert_eq!(унікальні.len(), імена.len(), "імена мусять бути різні");
     }
 
     #[test]
