@@ -21,6 +21,7 @@ downloader-ipc.workspace = true
 downloader-i18n.workspace = true
 anyhow.workspace = true
 clap.workspace = true
+clap_complete.workspace = true
 reqwest.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 tracing.workspace = true

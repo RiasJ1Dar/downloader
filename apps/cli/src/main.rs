@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use downloader_core::protocol::{
     Cancel, PlannedFile, Progress, ProgressSink, Protocol, RateLimitSupport, RunContext,
     Session,
@@ -41,6 +41,43 @@ struct Cli {
 
     #[command(subcommand)]
     command: Command,
+}
+
+#[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ShellType {
+    /// PowerShell (pwsh / powershell)
+    #[value(name = "pwsh", alias = "powershell")]
+    PowerShell,
+    /// Bash
+    #[value(name = "bash")]
+    Bash,
+    /// Zsh
+    #[value(name = "zsh")]
+    Zsh,
+    /// Fish
+    #[value(name = "fish")]
+    Fish,
+    /// Elvish
+    #[value(name = "elvish")]
+    Elvish,
+}
+
+impl ShellType {
+    pub fn to_shell(self) -> clap_complete::Shell {
+        match self {
+            Self::PowerShell => clap_complete::Shell::PowerShell,
+            Self::Bash => clap_complete::Shell::Bash,
+            Self::Zsh => clap_complete::Shell::Zsh,
+            Self::Fish => clap_complete::Shell::Fish,
+            Self::Elvish => clap_complete::Shell::Elvish,
+        }
+    }
+}
+
+impl From<ShellType> for clap_complete::Shell {
+    fn from(s: ShellType) -> Self {
+        s.to_shell()
+    }
 }
 
 #[derive(Subcommand, Debug)]
@@ -241,6 +278,12 @@ enum Command {
         #[command(subcommand)]
         sub: Option<QueueCommand>,
     },
+
+    /// Згенерувати скрипт автодоповнення для командної оболонки.
+    Completions {
+        /// Оболонка: pwsh, bash, zsh, fish або elvish.
+        shell: ShellType,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -348,6 +391,11 @@ async fn main() -> Result<()> {
         .context("не вдалося створити HTTP-клієнт")?;
 
     match cli.command {
+        Command::Completions { shell } => {
+            let mut cmd = Cli::command();
+            clap_complete::generate(shell.to_shell(), &mut cmd, "dl", &mut std::io::stdout());
+        }
+
         Command::Add {
             url,
             list,
@@ -1387,6 +1435,86 @@ fn format_size(bytes: u64) -> String {
 mod tests {
     use super::*;
     use clap::CommandFactory;
+
+    #[test]
+    fn clap_розбирає_completions() {
+        Cli::command().debug_assert();
+
+        let cli = Cli::try_parse_from(["dl", "completions", "pwsh"]).expect("pwsh");
+        assert!(matches!(
+            cli.command,
+            Command::Completions {
+                shell: ShellType::PowerShell
+            }
+        ));
+
+        let cli = Cli::try_parse_from(["dl", "completions", "powershell"]).expect("powershell alias");
+        assert!(matches!(
+            cli.command,
+            Command::Completions {
+                shell: ShellType::PowerShell
+            }
+        ));
+
+        let cli = Cli::try_parse_from(["dl", "completions", "bash"]).expect("bash");
+        assert!(matches!(
+            cli.command,
+            Command::Completions {
+                shell: ShellType::Bash
+            }
+        ));
+
+        let cli = Cli::try_parse_from(["dl", "completions", "zsh"]).expect("zsh");
+        assert!(matches!(
+            cli.command,
+            Command::Completions {
+                shell: ShellType::Zsh
+            }
+        ));
+
+        let cli = Cli::try_parse_from(["dl", "completions", "fish"]).expect("fish");
+        assert!(matches!(
+            cli.command,
+            Command::Completions {
+                shell: ShellType::Fish
+            }
+        ));
+
+        let cli = Cli::try_parse_from(["dl", "completions", "elvish"]).expect("elvish");
+        assert!(matches!(
+            cli.command,
+            Command::Completions {
+                shell: ShellType::Elvish
+            }
+        ));
+    }
+
+    #[test]
+    fn генерація_completions_дає_непорожній_скрипт() {
+        for shell in [
+            ShellType::PowerShell,
+            ShellType::Bash,
+            ShellType::Zsh,
+            ShellType::Fish,
+            ShellType::Elvish,
+        ] {
+            let mut buf = Vec::new();
+            let mut cmd = Cli::command();
+            clap_complete::generate(shell.to_shell(), &mut cmd, "dl", &mut buf);
+            assert!(
+                !buf.is_empty(),
+                "скрипт для {shell:?} не повинен бути порожнім"
+            );
+            let text = String::from_utf8(buf).expect("валідний UTF-8");
+            assert!(text.contains("dl"), "скрипт має згадувати бінарник dl");
+            if shell == ShellType::PowerShell {
+                assert!(
+                    text.contains("Register-ArgumentCompleter"),
+                    "PowerShell-скрипт має містити Register-ArgumentCompleter"
+                );
+            }
+        }
+    }
 
     #[test]
     fn clap_розбирає_pause_resume_rm() {
