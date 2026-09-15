@@ -76,6 +76,23 @@
       те саме з консолі.
     -->
     <ComponentGroup Id="Core" Directory="INSTALLFOLDER">
+      <!--
+        Ліцензія їде з програмою, а не лишається в репозиторії: людина, яка
+        поставила пакет, має бачити умови, не шукаючи їх у мережі. Те саме
+        стосується переліку сторонніх компонентів — MIT і Apache-2.0 прямо
+        вимагають, щоб їхні копірайти йшли разом із поширюваним продуктом.
+      -->
+      <Component Id="LicenseFile">
+        <File Id="LICENSE.txt" Source="$(var.RootDir)\LICENSE" KeyPath="yes" />
+      </Component>
+
+      <Component Id="NoticesFile">
+        <File
+            Id="THIRD.PARTY.NOTICES.txt"
+            Source="$(var.RootDir)\THIRD-PARTY-NOTICES.txt"
+            KeyPath="yes" />
+      </Component>
+
       <Component Id="CoreExe">
         <File Source="$(var.ReleaseDir)\downloader-core.exe" KeyPath="yes" />
       </Component>

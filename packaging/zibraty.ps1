@@ -88,6 +88,7 @@ function Зібрати-Пакет {
         '-d', "Version=$Version",
         '-d', "ReleaseDir=$release",
         '-d', "UiDir=$вікно",
+        '-d', "RootDir=$корінь",
         '-arch', 'x64',
         '-o', $msi
     )
