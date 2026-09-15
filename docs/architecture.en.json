@@ -1,0 +1,235 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Downloader — architecture",
+    "quality_profile": "showcase",
+    "views": [
+      {
+        "id": "task-path",
+        "label": "Path of a task",
+        "focus": ["ui", "ipc", "core", "http", "origin", "files"],
+        "note": "From a link in the window to bytes on disk."
+      },
+      {
+        "id": "clients",
+        "label": "Three clients, one channel",
+        "focus": ["ui", "cli", "ext", "nmhost", "ipc", "core"],
+        "note": "Window, CLI and browser speak to the core over the same protocol."
+      },
+      {
+        "id": "modules",
+        "label": "Modules behind a contract",
+        "focus": ["core", "http", "stream", "ytdlp", "origin"],
+        "note": "The core names no protocol — only a registry and a contract."
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "ext",
+      "type": "external",
+      "label": "Chrome extension",
+      "sublabel": "MV3 · intercepts downloads",
+      "pos": [40, 330],
+      "size": [170, 66]
+    },
+    {
+      "id": "ui",
+      "type": "frontend",
+      "label": "Window",
+      "sublabel": "Avalonia 12 · .NET 10",
+      "pos": [40, 110],
+      "size": [170, 66],
+      "tag": "Windows · Linux · macOS"
+    },
+    {
+      "id": "cli",
+      "type": "frontend",
+      "label": "CLI dl",
+      "sublabel": "Rust · all the window can do",
+      "pos": [40, 220],
+      "size": [170, 66]
+    },
+    {
+      "id": "nmhost",
+      "type": "backend",
+      "label": "downloader-nmhost",
+      "sublabel": "native messaging",
+      "pos": [350, 330],
+      "size": [170, 66]
+    },
+    {
+      "id": "ipc",
+      "type": "messagebus",
+      "label": "Local channel",
+      "sublabel": "named pipe / unix socket",
+      "pos": [350, 180],
+      "size": [170, 66],
+      "tag": "no TCP port"
+    },
+    {
+      "id": "core",
+      "type": "backend",
+      "label": "downloader-core",
+      "sublabel": "queue, progress, events · tray",
+      "pos": [560, 180],
+      "size": [190, 78]
+    },
+    {
+      "id": "db",
+      "type": "database",
+      "label": "SQLite",
+      "sublabel": "task 1..N file 1..N segment",
+      "pos": [560, 330],
+      "size": [190, 66]
+    },
+    {
+      "id": "http",
+      "type": "backend",
+      "label": "proto-http",
+      "sublabel": "segments, If-Range, retries",
+      "pos": [850, 290],
+      "size": [180, 66]
+    },
+    {
+      "id": "stream",
+      "type": "backend",
+      "label": "proto-hls · proto-dash",
+      "sublabel": "playlists, tracks, merging",
+      "pos": [850, 70],
+      "size": [180, 66]
+    },
+    {
+      "id": "ytdlp",
+      "type": "backend",
+      "label": "proto-ytdlp",
+      "sublabel": "external yt-dlp",
+      "pos": [850, 180],
+      "size": [180, 66]
+    },
+    {
+      "id": "origin",
+      "type": "external",
+      "label": "Origin server",
+      "sublabel": "HTTP(S) · CDN",
+      "pos": [1130, 180],
+      "size": [170, 66]
+    },
+    {
+      "id": "files",
+      "type": "database",
+      "label": "File on disk",
+      "sublabel": "data → sync → state .dlpart",
+      "pos": [850, 400],
+      "size": [180, 66],
+      "tag": "Mark-of-the-Web"
+    },
+    {
+      "id": "ffmpeg",
+      "type": "external",
+      "label": "ffmpeg",
+      "sublabel": "merges tracks into one file",
+      "pos": [1130, 400],
+      "size": [170, 66],
+      "tag": "LGPL, in the installer"
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "Core process — outlives the window",
+      "wraps": ["core", "db", "http", "stream", "ytdlp", "files"]
+    },
+    {
+      "kind": "security-group",
+      "label": "Protocol contract — the core does not know their names",
+      "wraps": ["http", "stream", "ytdlp"]
+    }
+  ],
+  "connections": [
+    {
+      "id": "ui-ipc",
+      "from": "ui",
+      "to": "ipc",
+      "label": "frame: 4 bytes + JSON",
+      "variant": "emphasis",
+      "labelDy": -14
+    },
+    { "id": "cli-ipc", "from": "cli", "to": "ipc" },
+    { "id": "ext-nmhost", "from": "ext", "to": "nmhost", "label": "stdio" },
+    { "id": "nmhost-ipc", "from": "nmhost", "to": "ipc" },
+    {
+      "id": "ipc-core",
+      "from": "ipc",
+      "to": "core",
+      "label": "request · list snapshot",
+      "variant": "emphasis",
+      "labelDy": -27
+    },
+    {
+      "id": "core-db",
+      "from": "core",
+      "to": "db",
+      "label": "task state",
+      "labelDy": 24
+    },
+    {
+      "id": "core-http",
+      "from": "core",
+      "to": "http",
+      "label": "who takes this link"
+    },
+    { "id": "core-stream", "from": "core", "to": "stream" },
+    { "id": "core-ytdlp", "from": "core", "to": "ytdlp" },
+    {
+      "id": "http-origin",
+      "from": "http",
+      "to": "origin",
+      "label": "Range: bytes=",
+      "variant": "emphasis"
+    },
+    { "id": "stream-origin", "from": "stream", "to": "origin", "variant": "dashed" },
+    {
+      "id": "http-files",
+      "from": "http",
+      "to": "files",
+      "label": "positional write",
+      "labelDy": 24
+    },
+    {
+      "id": "ffmpeg-files",
+      "from": "ffmpeg",
+      "to": "files",
+      "label": "video + audio",
+      "variant": "dashed"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Clients",
+      "items": [
+        "Window, CLI and browser are equals: one protocol, no shortcuts",
+        "The channel is local only: a named pipe, never TCP on 127.0.0.1"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Core",
+      "items": [
+        "A separate process in the tray: close the window, the download stays",
+        "Speed and ETA are computed here — otherwise clients would show different numbers"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Modules",
+      "items": [
+        "The core asks the registry «who takes this link» instead of calling HTTP itself",
+        "The human picks the quality: HLS and DASH list it from the manifest, YouTube from its formats",
+        "A torrent module drops in — the contract already allows for it"
+      ]
+    }
+  ]
+}
