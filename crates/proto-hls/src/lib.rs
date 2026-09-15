@@ -5,8 +5,8 @@
 //! `#EXT-X-ENDLIST` — окремий режим: маніфест перечитуємо, сегменти
 //! забираємо щойно з'явились (вікно ковзає). DRM не обходимо.
 
-mod decrypt;
-mod playlist;
+pub mod decrypt;
+pub mod playlist;
 
 use std::collections::{HashMap, HashSet};
 use std::io::Write;
@@ -705,7 +705,7 @@ async fn перекласти_контейнер(dest: &Path) {
 ///
 /// Висота може бути відсутня (`RESOLUTION` — необов'язковий атрибут), тоді
 /// людині лишається бітрейт — це чесніше, ніж вигадати висоту.
-fn якості(варіанти: &[Варіант]) -> Vec<Variant> {
+pub fn якості(варіанти: &[Варіант]) -> Vec<Variant> {
     варіанти
         .iter()
         .rev()

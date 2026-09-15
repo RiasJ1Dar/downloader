@@ -4,6 +4,6 @@
   "path": "DOWNLOADER_NMHOST_EXE",
   "type": "stdio",
   "allowed_origins": [
-    "chrome-extension://dcfgihgimkkfkhmbdpogbicigioldhba/"
+    "chrome-extension://pionjhjgjaehkcpkidlblhonbejfdcdj/"
   ]
 }

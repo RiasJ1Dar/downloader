@@ -12,7 +12,7 @@ use anyhow::{Context, Result};
 use crate::HOST_NAME;
 
 /// Стабільний ID unpacked-розширення (з `key` у manifest.json).
-pub const EXTENSION_ID: &str = "dcfgihgimkkfkhmbdpogbicigioldhba";
+pub const EXTENSION_ID: &str = "pionjhjgjaehkcpkidlblhonbejfdcdj";
 
 /// JSON маніфесту native host.
 #[must_use]
