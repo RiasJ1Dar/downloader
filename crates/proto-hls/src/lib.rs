@@ -218,7 +218,7 @@ impl HlsProtocol {
                         return Ok(None);
                     };
                     return self
-                        .тягнути_live(&ctx.source, m, dest, sink, &ctx.cancel, &session)
+                        .тягнути_live(&ctx.source, m, dest, sink, &ctx)
                         .await;
                 }
                 if let Some(dest) = video_dest {
@@ -255,8 +255,7 @@ impl HlsProtocol {
                                         m,
                                         dest,
                                         sink,
-                                        &ctx.cancel,
-                                        &session,
+                                        &ctx,
                                     )
                                     .await;
                             }
@@ -308,16 +307,28 @@ impl HlsProtocol {
 
 impl HlsProtocol {
     /// Live: забирати сегменти з ковзного вікна, поки не з'явиться ENDLIST
-    /// або скасування. Хто чекає кінцевий плейлист — втратить випалі сегменти.
+    /// Live: забирати сегменти з ковзного вікна, поки не досягнуто ліміту
+    /// тривалості, не з'явиться ENDLIST або скасування.
     async fn тягнути_live(
         &self,
         playlist_url: &str,
         перша: Медіа,
         dest: &Path,
         sink: &dyn ProgressSink,
-        cancel: &Cancel,
-        session: &Session,
+        ctx: &RunContext,
     ) -> Result<Option<ResumeBlob>> {
+        if ctx.rewind && !перша.is_event && перша.media_sequence > 0 {
+            return Err(Error::Store(
+                "джерело не дає перемотування назад: live-потік без буфера перемотування (EXT-X-MEDIA-SEQUENCE > 0)".to_owned(),
+            ));
+        }
+
+        if !перша.end_list && ctx.max_duration.is_none() {
+            return Err(Error::Store(
+                "нескінченний live-потік потребує явного обмеження тривалості (--duration, наприклад: --duration 10m)".to_owned(),
+            ));
+        }
+
         let хоче_mp4 = dest
             .extension()
             .and_then(|e| e.to_str())
@@ -337,6 +348,15 @@ impl HlsProtocol {
 
         let mut seen = HashSet::new();
         let mut done = 0u64;
+        let mut recorded_seconds: f64 = 0.0;
+        let max_duration = ctx.max_duration;
+        let start_time = std::time::Instant::now();
+        let duration_reached = |recorded: f64| -> bool {
+            match max_duration {
+                Some(limit) => recorded >= limit.as_secs_f64() || start_time.elapsed() >= limit,
+                None => false,
+            }
+        };
         let mut discontinuity = false;
         let mut target_duration = перша.target_duration.max(1);
         let mut підряд_помилок = 0u8;
@@ -345,7 +365,7 @@ impl HlsProtocol {
         let mut медіа = перша;
 
         loop {
-            if cancel.is_cancelled() {
+            if ctx.cancel.is_cancelled() {
                 return Ok(Some(Vec::new()));
             }
             for seg in &медіа.сегменти {
@@ -357,28 +377,37 @@ impl HlsProtocol {
                     &self.client,
                     seg,
                     None,
-                    session,
+                    &ctx.session,
                     &key_cache,
                     &limiter,
-                    cancel,
+                    &ctx.cancel,
                 )
                 .await?;
-                if cancel.is_cancelled() {
+                if ctx.cancel.is_cancelled() {
                     return Ok(Some(Vec::new()));
                 }
                 out_file.write_all(&bytes)?;
                 done = done.saturating_add(bytes.len() as u64);
+                recorded_seconds += seg.duration as f64;
                 sink.report(Progress::Advanced { done });
                 sink.report(Progress::Segments { count: seen.len() });
+
+                if duration_reached(recorded_seconds) {
+                    tracing::info!(recorded_seconds, "досягнуто ліміту тривалості live-запису");
+                    break;
+                }
+            }
+            if duration_reached(recorded_seconds) {
+                break;
             }
             if медіа.end_list {
                 break;
             }
             tokio::time::sleep(пауза_live(target_duration)).await;
-            if cancel.is_cancelled() {
+            if ctx.cancel.is_cancelled() {
                 return Ok(Some(Vec::new()));
             }
-            медіа = match розібрати_медіа(&self.client, playlist_url, dest, session).await {
+            медіа = match розібрати_медіа(&self.client, playlist_url, dest, &ctx.session).await {
                 Ok((m, _)) => {
                     підряд_помилок = 0;
                     m
@@ -1212,6 +1241,8 @@ mod tests {
                 session: Session::default(),
                 variant: None,
                 limiter: None,
+                max_duration: None,
+                rewind: false,
             },
             &Німий,
         )
@@ -1327,6 +1358,8 @@ mod tests {
                 session: Session::default(),
                 variant: None,
                 limiter: None,
+                max_duration: None,
+                rewind: false,
             },
             &Німий,
         )
@@ -1374,6 +1407,8 @@ mod tests {
                 session: Session::default(),
                 variant: None,
                 limiter: None,
+                max_duration: None,
+                rewind: false,
             },
             &Німий,
         )
@@ -1405,6 +1440,8 @@ mod tests {
                 session: Session::default(),
                 variant: None,
                 limiter: None,
+                max_duration: None,
+                rewind: false,
             },
             &Німий,
         )
@@ -1449,6 +1486,8 @@ mod tests {
                 session: Session::default(),
                 variant: None,
                 limiter: None,
+                max_duration: None,
+                rewind: false,
             },
             &Німий,
         )
@@ -1480,6 +1519,8 @@ mod tests {
                 session: Session::default(),
                 variant: None,
                 limiter: None,
+                max_duration: None,
+                rewind: false,
             },
             &Німий,
         )
@@ -1523,6 +1564,8 @@ mod tests {
                 session: Session::default(),
                 variant: None,
                 limiter: None,
+                max_duration: Some(std::time::Duration::from_secs(10)),
+                rewind: false,
             },
             &Німий,
         )
@@ -1536,6 +1579,103 @@ mod tests {
             got, expect,
             "live мав зклеїти обидва сегменти, не лише вікно на ENDLIST"
         );
+        server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn live_без_тривалості_чесно_відмовляє() {
+        let server = EvilServer::start().await.unwrap();
+        let url = server.url("/hls/live/media.m3u8");
+        let p = HlsProtocol::new().unwrap();
+        let dir = std::env::temp_dir().join(format!("hls-live-nodur-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let dest = dir.join("out.ts");
+        let res = p.run(
+            RunContext {
+                task_id: 10,
+                source: url,
+                targets: vec![dest],
+                resume: None,
+                cancel: Cancel::new(),
+                session: Session::default(),
+                variant: None,
+                limiter: None,
+                max_duration: None,
+                rewind: false,
+            },
+            &Німий,
+        ).await;
+
+        assert!(res.is_err(), "live без --duration має повертати помилку");
+        let err = res.unwrap_err().to_string();
+        assert!(
+            err.contains("нескінченний live-потік потребує явного обмеження тривалості"),
+            "очікували чесну відмову про --duration, отримали: {err}"
+        );
+        server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn live_перемотування_без_буфера_чесно_відмовляє() {
+        let server = EvilServer::start().await.unwrap();
+        let url = server.url("/hls/live/media.m3u8");
+        let p = HlsProtocol::new().unwrap();
+        let dir = std::env::temp_dir().join(format!("hls-live-rewind-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let dest = dir.join("out.ts");
+        let res = p.run(
+            RunContext {
+                task_id: 11,
+                source: url,
+                targets: vec![dest],
+                resume: None,
+                cancel: Cancel::new(),
+                session: Session::default(),
+                variant: None,
+                limiter: None,
+                max_duration: Some(std::time::Duration::from_secs(10)),
+                rewind: true,
+            },
+            &Німий,
+        ).await;
+
+        assert!(res.is_err(), "live з rewind без буфера має відхилятися");
+        let err = res.unwrap_err().to_string();
+        assert!(
+            err.contains("джерело не дає перемотування назад"),
+            "очікували відмову про перемотування, отримали: {err}"
+        );
+        server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn live_запис_із_межею_тривалості() {
+        let server = EvilServer::start().await.unwrap();
+        let url = server.url("/hls/live/media.m3u8");
+        let p = HlsProtocol::new().unwrap();
+        let dir = std::env::temp_dir().join(format!("hls-live-dur-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let dest = dir.join("out.ts");
+        let res = p.run(
+            RunContext {
+                task_id: 12,
+                source: url,
+                targets: vec![dest.clone()],
+                resume: None,
+                cancel: Cancel::new(),
+                session: Session::default(),
+                variant: None,
+                limiter: None,
+                max_duration: Some(std::time::Duration::from_secs(1)),
+                rewind: false,
+            },
+            &Німий,
+        ).await;
+
+        assert!(res.is_ok(), "запис live із межею мав успішно завершитися");
+        let got = std::fs::read(&dest).unwrap();
+        assert!(!got.is_empty(), "записаний файл не має бути порожнім");
+        assert!(got.starts_with(b"SEG0-PAYLOAD-AAAAAAAAAAAAAAAA"));
         server.shutdown().await;
     }
 }

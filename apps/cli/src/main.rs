@@ -120,6 +120,14 @@ enum Command {
         /// Варіант якості зі `dl variants <url>`: наприклад `720`.
         #[arg(long)]
         variant: Option<String>,
+
+        /// Обмеження тривалості для live-потоків (наприклад "10m", "30s", "1h").
+        #[arg(long)]
+        duration: Option<String>,
+
+        /// Почати від початку буфера live-потоку (перемотування назад / DVR).
+        #[arg(long)]
+        rewind: bool,
     },
 
     /// Показати, що відомо про посилання, нічого не качаючи.
@@ -163,6 +171,14 @@ enum Command {
         /// Черга завантаження (типово "default").
         #[arg(short = 'q', long)]
         queue: Option<String>,
+
+        /// Обмеження тривалості для live-потоків (наприклад "10m", "30s", "1h").
+        #[arg(long)]
+        duration: Option<String>,
+
+        /// Почати від початку буфера live-потоку (перемотування назад / DVR).
+        #[arg(long)]
+        rewind: bool,
     },
 
     /// Показати завдання ядра.
@@ -440,6 +456,8 @@ async fn main() -> Result<()> {
             cookie,
             referer,
             queue,
+            duration,
+            rewind,
         } => {
             let urls = зібрати_адреси(url, list, clipboard)?;
             let mut core = client::Client::connect().await?;
@@ -465,6 +483,8 @@ async fn main() -> Result<()> {
                         referer: session.referer.clone(),
                         variant: None,
                         queue: queue.clone(),
+                        duration: duration.clone(),
+                        rewind,
                     })
                     .await?;
                 match resp {
@@ -967,7 +987,13 @@ async fn main() -> Result<()> {
             cookie,
             referer,
             variant,
+            duration,
+            rewind,
         } => {
+            let max_duration = duration
+                .as_deref()
+                .map(downloader_core::protocol::parse_duration)
+                .transpose()?;
             let urls = expand::розгорнути_шаблон(&url)?;
             if urls.len() != 1 {
                 anyhow::bail!(
@@ -985,17 +1011,47 @@ async fn main() -> Result<()> {
             }
             let hls = HlsProtocol::new()?;
             if hls.handles(url) {
-                качати_модулем(&hls, url, out, limit_kb, session, variant).await?;
+                качати_модулем(
+                    &hls,
+                    url,
+                    out,
+                    limit_kb,
+                    session,
+                    variant,
+                    max_duration,
+                    rewind,
+                )
+                .await?;
                 return Ok(());
             }
             let dash = DashProtocol::new()?;
             if dash.handles(url) {
-                качати_модулем(&dash, url, out, limit_kb, session, variant).await?;
+                качати_модулем(
+                    &dash,
+                    url,
+                    out,
+                    limit_kb,
+                    session,
+                    variant,
+                    max_duration,
+                    rewind,
+                )
+                .await?;
                 return Ok(());
             }
             let yt = YtdlpProtocol::new();
             if yt.handles(url) {
-                качати_модулем(&yt, url, out, limit_kb, session, variant).await?;
+                качати_модулем(
+                    &yt,
+                    url,
+                    out,
+                    limit_kb,
+                    session,
+                    variant,
+                    max_duration,
+                    rewind,
+                )
+                .await?;
                 return Ok(());
             }
             let info = probe_with_session(&client, url, &session).await?;
@@ -1147,6 +1203,7 @@ async fn показати_модуль(p: &dyn Protocol, url: &str) -> Result<()
 }
 
 /// `dl get` для HLS/DASH: probe → шляхи для selected → `run` → MotW.
+#[allow(clippy::too_many_arguments)]
 async fn качати_модулем(
     p: &dyn Protocol,
     url: &str,
@@ -1154,6 +1211,8 @@ async fn качати_модулем(
     limit_kb: u64,
     session: Session,
     варіант: Option<String>,
+    max_duration: Option<Duration>,
+    rewind: bool,
 ) -> Result<()> {
     if limit_kb > 0 {
         match p.set_rate_limit(limit_kb.saturating_mul(1024)) {
@@ -1203,6 +1262,8 @@ async fn качати_модулем(
         session,
         variant: варіант,
         limiter: None,
+        max_duration,
+        rewind,
     };
     if p.run(ctx, &НімийПрогрес).await?.is_some() {
         println!("{}", t("stopped-early"));
@@ -1895,9 +1956,18 @@ mod tests {
         ));
         std::fs::create_dir_all(&dir).expect("тека");
         let dest = dir.join("out.ts");
-        качати_модулем(&hls, &url, Some(dest.clone()), 0, Session::default(), None)
-            .await
-            .expect("get");
+        качати_модулем(
+            &hls,
+            &url,
+            Some(dest.clone()),
+            0,
+            Session::default(),
+            None,
+            None,
+            false,
+        )
+        .await
+        .expect("get");
 
         let got = std::fs::read(&dest).expect("прочитати");
         let mut expect = Vec::new();
@@ -1927,7 +1997,16 @@ mod tests {
         ));
         std::fs::create_dir_all(&dir).expect("тека");
         let dest = dir.join("out.mp4");
-        качати_модулем(&dash, &url, Some(dest.clone()), 0, Session::default(), None)
+        качати_модулем(
+            &dash,
+            &url,
+            Some(dest.clone()),
+            0,
+            Session::default(),
+            None,
+            None,
+            false,
+        )
             .await
             .expect("get");
 

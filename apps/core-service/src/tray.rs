@@ -139,7 +139,7 @@ async fn додати_з_буфера(engine: Arc<Engine>) -> anyhow::Result<()>
     }
     for url in urls {
         match engine
-            .add(&url, None, None, Session::default(), None, None)
+            .add(&url, None, None, Session::default(), None, None, None, false)
             .await
         {
             Ok(id) => tracing::info!(id, "з буфера"),

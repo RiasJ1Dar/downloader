@@ -31,6 +31,8 @@ pub struct Медіа {
     /// Секунди; для live — інтервал перечитування маніфесту.
     pub target_duration: u64,
     pub сегменти: Vec<Сегмент>,
+    /// Чи це потік типу EVENT (історія зберігається від початку трансляції).
+    pub is_event: bool,
 }
 
 /// Один медіасегмент.
@@ -149,11 +151,16 @@ fn медіа(m: m3u8_rs::MediaPlaylist, base: &str) -> Result<Медіа> {
         });
         seq = seq.saturating_add(1);
     }
+    let is_event = m
+        .playlist_type
+        .as_ref()
+        .is_some_and(|t| matches!(t, m3u8_rs::MediaPlaylistType::Event));
     Ok(Медіа {
         end_list: m.end_list,
         media_sequence: m.media_sequence,
         target_duration: m.target_duration,
         сегменти,
+        is_event,
     })
 }
 
