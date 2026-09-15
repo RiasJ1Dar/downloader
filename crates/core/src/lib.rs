@@ -57,6 +57,27 @@ mod tests {
             .canonicalize()
             .expect("корінь репозиторію");
         let mut extra = Vec::new();
+        // Дозволений лише README у корені: сам файл і його мовні версії
+        // `README.<мова>.md`, які GitHub показує перемикачем. Усе інше —
+        // план, нотатки, передача роботи — живе у сховищі Obsidian.
+        fn дозволений_readme(rel: &std::path::Path) -> bool {
+            if rel.parent() != Some(std::path::Path::new("")) {
+                return false;
+            }
+            let Some(імʼя) = rel.file_name().and_then(|n| n.to_str()) else {
+                return false;
+            };
+            if імʼя == "README.md" {
+                return true;
+            }
+            імʼя
+                .strip_prefix("README.")
+                .and_then(|x| x.strip_suffix(".md"))
+                .is_some_and(|мова| {
+                    (2..=5).contains(&мова.len())
+                        && мова.chars().all(|c| c.is_ascii_lowercase())
+                })
+        }
         fn walk(dir: &std::path::Path, root: &std::path::Path, extra: &mut Vec<std::path::PathBuf>) {
             let Ok(rd) = std::fs::read_dir(dir) else {
                 return;
@@ -75,7 +96,7 @@ mod tests {
                     continue;
                 }
                 let rel = p.strip_prefix(root).unwrap_or(&p);
-                if rel != std::path::Path::new("README.md") {
+                if !дозволений_readme(rel) {
                     extra.push(rel.to_path_buf());
                 }
             }
@@ -83,7 +104,8 @@ mod tests {
         walk(&root, &root, &mut extra);
         assert!(
             extra.is_empty(),
-            "на D:\\Downloader зайві .md (правило: лише README.md): {extra:?}"
+            "на D:\\Downloader зайві .md (правило: лише README.md \
+             і мовні README.<мова>.md у корені): {extra:?}"
         );
     }
 
