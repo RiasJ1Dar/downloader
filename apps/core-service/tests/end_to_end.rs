@@ -706,3 +706,126 @@ async fn керування_іменованими_чергами_через_ipc
 
     Ok(())
 }
+
+#[tokio::test]
+async fn портативний_режим_створює_базу_поруч_із_exe() -> anyhow::Result<()> {
+    let unique = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let port_dir = std::env::temp_dir().join(format!("dl-portable-test-{unique}"));
+    std::fs::create_dir_all(&port_dir)?;
+
+    let orig_exe = std::path::PathBuf::from(env!("CARGO_BIN_EXE_downloader-core"));
+    let Some(exe_name) = orig_exe.file_name() else {
+        anyhow::bail!("немає імені виконуваного файлу");
+    };
+    let port_exe = port_dir.join(exe_name);
+    std::fs::copy(&orig_exe, &port_exe)?;
+
+    // Створюємо маркерний файл portable.txt поруч із копією бінарника
+    let marker = port_dir.join(downloader_winutil::PORTABLE_MARKER);
+    std::fs::write(&marker, b"")?;
+
+    let pipe = if cfg!(windows) {
+        format!(r"\\.\pipe\downloader-port-{unique}")
+    } else {
+        format!("/tmp/downloader-port-{unique}.sock")
+    };
+
+    // Запускаємо ядро без аргументів --db та --downloads
+    let mut child = Command::new(&port_exe)
+        .arg("--pipe")
+        .arg(&pipe)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()?;
+
+    let mut connected = false;
+    for _ in 0..100 {
+        if let Ok(mut client) = connect_to(&pipe).await
+            && привітатись(&mut client).await.is_ok()
+        {
+            connected = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    let _ = child.kill();
+    let _ = child.wait();
+
+    if !connected {
+        anyhow::bail!("ядро у портативному режимі не відповіло на пінг");
+    }
+
+    let expected_db = port_dir.join("tasks.db");
+    if !expected_db.is_file() {
+        anyhow::bail!(
+            "у портативному режимі tasks.db мав створитися у {}, але файл відсутній",
+            port_dir.display()
+        );
+    }
+
+    let _ = std::fs::remove_dir_all(&port_dir);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn звичайний_режим_створює_базу_у_localappdata() -> anyhow::Result<()> {
+    let unique = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let appdata_dir = std::env::temp_dir().join(format!("dl-regular-appdata-{unique}"));
+    std::fs::create_dir_all(&appdata_dir)?;
+
+    let pipe = if cfg!(windows) {
+        format!(r"\\.\pipe\downloader-reg-{unique}")
+    } else {
+        format!("/tmp/downloader-reg-{unique}.sock")
+    };
+
+    // Запускаємо ядро з підміненим LOCALAPPDATA і без аргументу --db
+    let mut child = Command::new(env!("CARGO_BIN_EXE_downloader-core"))
+        .arg("--pipe")
+        .arg(&pipe)
+        .env("LOCALAPPDATA", &appdata_dir)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()?;
+
+    let mut connected = false;
+    for _ in 0..100 {
+        if let Ok(mut client) = connect_to(&pipe).await
+            && привітатись(&mut client).await.is_ok()
+        {
+            connected = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+
+    let _ = child.kill();
+    let _ = child.wait();
+
+    if !connected {
+        anyhow::bail!("ядро у звичайному режимі не відповіло на пінг");
+    }
+
+    let expected_db = appdata_dir.join("Downloader").join("tasks.db");
+    if !expected_db.is_file() {
+        anyhow::bail!(
+            "у звичайному режимі tasks.db мав створитися у {}, але файл відсутній",
+            expected_db.display()
+        );
+    }
+
+    let _ = std::fs::remove_dir_all(&appdata_dir);
+
+    Ok(())
+}
+
+

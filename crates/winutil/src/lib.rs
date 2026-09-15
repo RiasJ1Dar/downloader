@@ -27,4 +27,9 @@ pub use disk::{DiskError, вільні_байти, вистачить_місця
 pub use power::{PowerError, shutdown, sleep};
 pub use motw::{Zone, is_marked_internet, mark};
 pub use names::{extension_for_mime, sanitize, з_розширенням_mime};
-pub use paths::{long_path, unique_path};
+pub use paths::{
+    PORTABLE_MARKER, app_data_dir, data_dir_for_exe, default_data_dir,
+    default_downloads_dir, downloads_dir_for_exe, is_portable, is_portable_dir,
+    long_path, portable_marker_dir, unique_path,
+};
+
