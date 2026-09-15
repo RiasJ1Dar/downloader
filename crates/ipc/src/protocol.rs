@@ -62,6 +62,9 @@ pub enum Request {
         /// Рядок непрозорий: його видав модуль, йому ж він і повернеться.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         variant: Option<String>,
+        /// Черга завантаження. `None` — типова черга 'default'.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        queue: Option<String>,
     },
 
     /// Список завдань.
@@ -126,6 +129,54 @@ pub enum Request {
 
     /// Поточні правила ядра.
     Settings,
+
+    /// Перелік черг.
+    Queues,
+
+    /// Створити нову чергу.
+    QueueCreate {
+        name: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_concurrent: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        rate_limit: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        post_action: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        schedule_from: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        schedule_to: Option<String>,
+    },
+
+    /// Змінити параметри існуючої черги.
+    QueueConfigure {
+        name: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_concurrent: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        rate_limit: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        post_action: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        schedule_from: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        schedule_to: Option<String>,
+    },
+
+    /// Зупинити чергу.
+    QueuePause { name: String },
+
+    /// Відновити чергу.
+    QueueResume { name: String },
+
+    /// Перейменувати чергу.
+    QueueRename { old_name: String, new_name: String },
+
+    /// Видалити чергу (її завдання повертаються в 'default').
+    QueueDelete { name: String },
+
+    /// Перенести завдання у вказану чергу.
+    MoveToQueue { id: i64, queue: String },
 }
 
 /// Відповідь ядра на запит.
@@ -168,6 +219,9 @@ pub enum Response {
         #[serde(default)]
         quiet_rate: u64,
     },
+
+    /// Перелік черг із лімітами та статистикою.
+    Queues { queues: Vec<QueueView> },
 
     /// Зроблено.
     Ok,
@@ -213,6 +267,23 @@ pub enum Event {
 
     /// Завдання впало.
     Failed { id: i64, message: String },
+}
+
+/// Інформація про чергу для показу клієнту (CLI/UI).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QueueView {
+    pub id: i64,
+    pub name: String,
+    pub max_concurrent: u32,
+    pub rate_limit: u64,
+    pub paused: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schedule_from: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schedule_to: Option<String>,
+    pub post_action: String,
+    pub total_tasks: usize,
+    pub running_tasks: usize,
 }
 
 /// Одна частина роботи очима клієнта — те, з чого малюється смужка сегментів.
@@ -271,6 +342,13 @@ pub struct TaskView {
     /// Куди пишеться файл, якщо відомо.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dest: Option<String>,
+    /// Іменована черга, до якої належить завдання.
+    #[serde(default = "default_queue_name")]
+    pub queue: String,
+}
+
+fn default_queue_name() -> String {
+    "default".to_owned()
 }
 
 impl TaskView {
@@ -305,6 +383,7 @@ mod tests {
             cookies: None,
             referer: None,
             variant: None,
+            queue: None,
         };
 
         let json = serde_json::to_string(&req).unwrap();
@@ -339,6 +418,7 @@ mod tests {
                 cookies,
                 referer,
                 variant,
+                queue,
             } => {
                 assert!(variant.is_none(), "старий клієнт варіанта не шле");
                 assert_eq!(url, "https://e.com/a.bin");
@@ -346,6 +426,7 @@ mod tests {
                 assert!(parts.is_none());
                 assert!(cookies.is_none());
                 assert!(referer.is_none());
+                assert!(queue.is_none());
             }
             other => panic!("розібралось не в те: {other:?}"),
         }
@@ -359,7 +440,8 @@ mod tests {
             parts: None,
             cookies: Some("n=v; n2=v2".to_owned()),
             referer: Some("https://e.com/page".to_owned()),
-                    variant: None,
+            variant: None,
+            queue: None,
         };
         let json = serde_json::to_string(&req).unwrap();
         let back: Request = serde_json::from_str(&json).unwrap();
@@ -490,6 +572,71 @@ mod tests {
             segments: 4,
             error: None,
             dest: None,
+            queue: "default".to_owned(),
         }
+    }
+
+    #[test]
+    fn черги_запити_та_відповіді_серіалізуються() {
+        let req = Request::QueueCreate {
+            name: "night".to_owned(),
+            max_concurrent: Some(4),
+            rate_limit: Some(1024),
+            post_action: Some("sleep".to_owned()),
+            schedule_from: Some("22:00".to_owned()),
+            schedule_to: Some("06:00".to_owned()),
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        assert!(json.contains("\"kind\":\"queue_create\""));
+        assert!(json.contains("\"name\":\"night\""));
+
+        let back: Request = serde_json::from_str(&json).unwrap();
+        match back {
+            Request::QueueCreate { name, max_concurrent, .. } => {
+                assert_eq!(name, "night");
+                assert_eq!(max_concurrent, Some(4));
+            }
+            other => panic!("{other:?}"),
+        }
+
+        let resp = Response::Queues {
+            queues: vec![QueueView {
+                id: 1,
+                name: "default".to_owned(),
+                max_concurrent: 3,
+                rate_limit: 0,
+                paused: false,
+                schedule_from: None,
+                schedule_to: None,
+                post_action: "none".to_owned(),
+                total_tasks: 5,
+                running_tasks: 2,
+            }],
+        };
+        let rjson = serde_json::to_string(&resp).unwrap();
+        let rback: Response = serde_json::from_str(&rjson).unwrap();
+        match rback {
+            Response::Queues { queues } => {
+                assert_eq!(queues.len(), 1);
+                assert_eq!(queues[0].name, "default");
+                assert_eq!(queues[0].running_tasks, 2);
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn task_view_без_черги_отримує_default() {
+        let json = r#"{
+            "id": 1,
+            "url": "https://e.com/test",
+            "name": "test",
+            "status": "queued",
+            "done": 0,
+            "speed": 0,
+            "segments": 1
+        }"#;
+        let t: TaskView = serde_json::from_str(json).unwrap();
+        assert_eq!(t.queue, "default");
     }
 }

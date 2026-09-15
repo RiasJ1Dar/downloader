@@ -26,7 +26,7 @@ use crate::error::{Error, Result};
 ///
 /// Зростає з кожною несумісною зміною. База новішої версії відкриттю не
 /// підлягає: старша програма не знає про нові поля й тихо їх загубить.
-pub const SCHEMA_VERSION: i64 = 5;
+pub const SCHEMA_VERSION: i64 = 6;
 
 /// Налаштування з'єднання.
 ///
@@ -96,6 +96,9 @@ pub fn migrate(conn: &Connection) -> Result<()> {
     }
     if current < 5 {
         conn.execute_batch(V5).map_err(db_err)?;
+    }
+    if current < 6 {
+        conn.execute_batch(V6).map_err(db_err)?;
     }
 
     conn.pragma_update(None, "user_version", SCHEMA_VERSION)
@@ -196,6 +199,30 @@ ALTER TABLE task ADD COLUMN variant TEXT;
 const V5: &str = r#"
 CREATE INDEX IF NOT EXISTS idx_task_status_id ON task(status, id DESC);
 CREATE INDEX IF NOT EXISTS idx_task_category  ON task(category_id);
+"#;
+
+/// Іменовані черги завантажень: власні ліміти, розклад і післядії.
+///
+/// Кожне завдання прив'язується до черги через `queue_name`. За замовчуванням —
+/// типова черга 'default' зі стелею 3 одночасних і без ліміту швидкості.
+const V6: &str = r#"
+CREATE TABLE IF NOT EXISTS queue (
+    id              INTEGER PRIMARY KEY,
+    name            TEXT NOT NULL UNIQUE,
+    max_concurrent  INTEGER NOT NULL DEFAULT 3,
+    rate_limit      INTEGER NOT NULL DEFAULT 0,
+    paused          INTEGER NOT NULL DEFAULT 0,
+    schedule_from   INTEGER,
+    schedule_to     INTEGER,
+    post_action     TEXT NOT NULL DEFAULT 'none',
+    created_at      INTEGER NOT NULL
+);
+
+INSERT OR IGNORE INTO queue (name, max_concurrent, rate_limit, paused, post_action, created_at)
+VALUES ('default', 3, 0, 0, 'none', 0);
+
+ALTER TABLE task ADD COLUMN queue_name TEXT NOT NULL DEFAULT 'default';
+CREATE INDEX IF NOT EXISTS idx_task_queue_status ON task(queue_name, status, id DESC);
 "#;
 
 #[cfg(test)]

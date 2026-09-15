@@ -112,12 +112,86 @@ public sealed partial class MainViewModel : ObservableObject
 
     public ObservableCollection<TaskRow> Tasks { get; } = new();
 
+    public ObservableCollection<QueueRow> Queues { get; } = new();
+
+    /// <summary>Імена черг для випадаючих списків.</summary>
+    public ObservableCollection<string> QueueNames { get; } = new();
+
+    /// <summary>Елементи фільтра черг: перший — 'Всі черги', далі назви черг.</summary>
+    public ObservableCollection<string> QueueFilterOptions { get; } = new();
+
+    [ObservableProperty]
+    private string _selectedFilter = Каталог.T("ui-all-queues");
+
+    [ObservableProperty]
+    private string _selectedAddQueue = "default";
+
+    [ObservableProperty]
+    private string _targetMoveQueue = "default";
+
+    [ObservableProperty]
+    private bool _newQueueOpen;
+
+    [ObservableProperty]
+    private string _newQueueName = "";
+
+    [ObservableProperty]
+    private string _newQueueSlotsText = "3";
+
+    [ObservableProperty]
+    private string _newQueueRateText = "0";
+
+    [ObservableProperty]
+    private string _newQueueScheduleFromText = "";
+
+    [ObservableProperty]
+    private string _newQueueScheduleToText = "";
+
+    [ObservableProperty]
+    private int _newQueuePostActionIndex;
+
+    [ObservableProperty]
+    private bool _canManageCurrentQueue;
+
+    [ObservableProperty]
+    private bool _canDeleteCurrentQueue;
+
+    [ObservableProperty]
+    private bool _isCurrentQueuePaused;
+
+    private int _snapshotCounter;
+
     public MainViewModel()
     {
         DarkTheme = UiPrefs.LoadDark();
         ApplyTheme(DarkTheme);
         _ = ConnectLoopAsync();
         _ = DetailsLoopAsync();
+    }
+
+    partial void OnSelectedFilterChanged(string value)
+    {
+        UpdateQueueManagementState();
+        ApplyFilter();
+    }
+
+    private void UpdateQueueManagementState()
+    {
+        bool isAll = string.IsNullOrEmpty(SelectedFilter) || SelectedFilter == Каталог.T("ui-all-queues");
+        CanManageCurrentQueue = !isAll;
+        CanDeleteCurrentQueue = !isAll && SelectedFilter != "default";
+
+        QueueRow? cur = Queues.FirstOrDefault(q => q.Name == SelectedFilter);
+        IsCurrentQueuePaused = cur?.Paused ?? false;
+    }
+
+    private void ApplyFilter()
+    {
+        bool showAll = string.IsNullOrEmpty(SelectedFilter) || SelectedFilter == Каталог.T("ui-all-queues");
+        foreach (var task in Tasks)
+        {
+            task.IsVisibleInFilter = showAll || task.Queue == SelectedFilter;
+        }
     }
 
     partial void OnDarkThemeChanged(bool value)
@@ -159,6 +233,7 @@ public sealed partial class MainViewModel : ObservableObject
                 });
 
                 await LoadSettingsAsync();
+                await LoadQueuesAsync();
                 await ListenAsync();
             }
             catch (CoreNotRunningException)
@@ -334,6 +409,7 @@ public sealed partial class MainViewModel : ObservableObject
             existingById[task.Id] = task;
         }
 
+        bool showAll = string.IsNullOrEmpty(SelectedFilter) || SelectedFilter == Каталог.T("ui-all-queues");
         var snapshotIds = new HashSet<long>(snapshot.Count);
         foreach (TaskView view in snapshot)
         {
@@ -341,10 +417,13 @@ public sealed partial class MainViewModel : ObservableObject
             if (existingById.TryGetValue(view.Id, out TaskRow? row))
             {
                 row.Update(view);
+                row.IsVisibleInFilter = showAll || row.Queue == SelectedFilter;
             }
             else
             {
-                Tasks.Add(new TaskRow(view));
+                var newRow = new TaskRow(view);
+                newRow.IsVisibleInFilter = showAll || newRow.Queue == SelectedFilter;
+                Tasks.Add(newRow);
             }
         }
 
@@ -363,6 +442,11 @@ public sealed partial class MainViewModel : ObservableObject
         }
 
         Упорядкувати(snapshot);
+
+        if (++_snapshotCounter % 8 == 0)
+        {
+            _ = LoadQueuesAsync();
+        }
     }
 
     /// <summary>
@@ -524,8 +608,12 @@ public sealed partial class MainViewModel : ObservableObject
             return;
         }
 
+        string? queue = string.IsNullOrEmpty(SelectedAddQueue) || SelectedAddQueue == "default"
+            ? null
+            : SelectedAddQueue;
+
         Response resp = await _commands.CallAsync(
-            new AddRequest(url, Variant: SelectedVariant?.Id),
+            new AddRequest(url, Variant: SelectedVariant?.Id, Queue: queue),
             _cts.Token);
 
         if (resp.IsError)
@@ -729,7 +817,288 @@ public sealed partial class MainViewModel : ObservableObject
         }
     }
 
+    public async Task LoadQueuesAsync()
+    {
+        if (_commands is null)
+        {
+            return;
+        }
+
+        try
+        {
+            Response resp = await _commands.CallAsync(new QueuesRequest(), _cts.Token);
+            if (resp.Kind == "queues" && resp.Queues is { } list)
+            {
+                await Dispatcher.UIThread.InvokeAsync(() =>
+                {
+                    var existing = Queues.ToDictionary(q => q.Name, q => q);
+                    var newNames = new HashSet<string>(list.Select(q => q.Name));
+
+                    foreach (var qv in list)
+                    {
+                        if (existing.TryGetValue(qv.Name, out var row))
+                        {
+                            row.Update(qv);
+                        }
+                        else
+                        {
+                            Queues.Add(new QueueRow(qv));
+                        }
+                    }
+
+                    for (int i = Queues.Count - 1; i >= 0; i--)
+                    {
+                        if (!newNames.Contains(Queues[i].Name))
+                        {
+                            Queues.RemoveAt(i);
+                        }
+                    }
+
+                    QueueNames.Clear();
+                    foreach (var q in list)
+                    {
+                        QueueNames.Add(q.Name);
+                    }
+                    if (!QueueNames.Contains("default"))
+                    {
+                        QueueNames.Insert(0, "default");
+                    }
+                    if (!QueueNames.Contains(SelectedAddQueue))
+                    {
+                        SelectedAddQueue = "default";
+                    }
+                    if (!QueueNames.Contains(TargetMoveQueue))
+                    {
+                        TargetMoveQueue = QueueNames.FirstOrDefault() ?? "default";
+                    }
+
+                    string all = Каталог.T("ui-all-queues");
+                    QueueFilterOptions.Clear();
+                    QueueFilterOptions.Add(all);
+                    foreach (var q in list)
+                    {
+                        QueueFilterOptions.Add(q.Name);
+                    }
+                    if (string.IsNullOrEmpty(SelectedFilter) || !QueueFilterOptions.Contains(SelectedFilter))
+                    {
+                        SelectedFilter = all;
+                    }
+
+                    UpdateQueueManagementState();
+                    ApplyFilter();
+                });
+            }
+        }
+        catch (Exception)
+        {
+            // Ігноруємо тимчасовий збій чи неготовність ядра
+        }
+    }
+
+    [RelayCommand]
+    private async Task PauseCurrentQueueAsync()
+    {
+        if (_commands is null || string.IsNullOrEmpty(SelectedFilter) || SelectedFilter == Каталог.T("ui-all-queues"))
+        {
+            return;
+        }
+
+        Response resp = await _commands.CallAsync(new QueuePauseRequest(SelectedFilter), _cts.Token);
+        if (resp.IsError)
+        {
+            Status = resp.Message ?? Каталог.T("ui-pause-failed");
+        }
+        else
+        {
+            Status = Каталог.T("queue-paused", ("name", SelectedFilter));
+            await LoadQueuesAsync();
+        }
+    }
+
+    [RelayCommand]
+    private async Task ResumeCurrentQueueAsync()
+    {
+        if (_commands is null || string.IsNullOrEmpty(SelectedFilter) || SelectedFilter == Каталог.T("ui-all-queues"))
+        {
+            return;
+        }
+
+        Response resp = await _commands.CallAsync(new QueueResumeRequest(SelectedFilter), _cts.Token);
+        if (resp.IsError)
+        {
+            Status = resp.Message ?? Каталог.T("ui-resume-failed");
+        }
+        else
+        {
+            Status = Каталог.T("queue-resumed", ("name", SelectedFilter));
+            await LoadQueuesAsync();
+        }
+    }
+
+    [RelayCommand]
+    private async Task DeleteCurrentQueueAsync()
+    {
+        if (_commands is null || string.IsNullOrEmpty(SelectedFilter)
+            || SelectedFilter == Каталог.T("ui-all-queues") || SelectedFilter == "default")
+        {
+            return;
+        }
+
+        string qName = SelectedFilter;
+        Response resp = await _commands.CallAsync(new QueueDeleteRequest(qName), _cts.Token);
+        if (resp.IsError)
+        {
+            Status = resp.Message ?? Каталог.T("ui-remove-failed");
+        }
+        else
+        {
+            SelectedFilter = Каталог.T("ui-all-queues");
+            Status = Каталог.T("queue-removed", ("name", qName));
+            await LoadQueuesAsync();
+        }
+    }
+
+    [RelayCommand]
+    private void ShowNewQueue()
+    {
+        NewQueueOpen = true;
+        NewQueueName = "";
+        NewQueueSlotsText = "3";
+        NewQueueRateText = "0";
+        NewQueueScheduleFromText = "";
+        NewQueueScheduleToText = "";
+        NewQueuePostActionIndex = 0;
+    }
+
+    [RelayCommand]
+    private void CancelNewQueue()
+    {
+        NewQueueOpen = false;
+    }
+
+    [RelayCommand]
+    private async Task CreateQueueAsync()
+    {
+        string name = NewQueueName.Trim();
+        if (string.IsNullOrEmpty(name) || _commands is null)
+        {
+            return;
+        }
+
+        uint? slots = uint.TryParse(NewQueueSlotsText, out uint s) && s >= 1 ? s : null;
+        ulong? rate = ulong.TryParse(NewQueueRateText, out ulong r) && r > 0 ? r * 1024 : null;
+        string? schedFrom = string.IsNullOrWhiteSpace(NewQueueScheduleFromText) ? null : NewQueueScheduleFromText.Trim();
+        string? schedTo = string.IsNullOrWhiteSpace(NewQueueScheduleToText) ? null : NewQueueScheduleToText.Trim();
+        string after = NewQueuePostActionIndex switch
+        {
+            1 => "sleep",
+            2 => "shutdown",
+            _ => "none",
+        };
+
+        Response resp = await _commands.CallAsync(
+            new QueueCreateRequest(name, slots, rate, schedFrom, schedTo, after),
+            _cts.Token);
+
+        if (resp.IsError)
+        {
+            Status = resp.Message ?? Каталог.T("ui-apply-failed");
+            return;
+        }
+
+        NewQueueOpen = false;
+        Status = Каталог.T("queue-created", ("name", name));
+        await LoadQueuesAsync();
+        SelectedAddQueue = name;
+        SelectedFilter = name;
+    }
+
+    [RelayCommand]
+    private async Task MoveSelectedTaskAsync()
+    {
+        if (Selected is null || _commands is null || string.IsNullOrEmpty(TargetMoveQueue))
+        {
+            return;
+        }
+
+        Response resp = await _commands.CallAsync(
+            new MoveToQueueRequest(Selected.Id, TargetMoveQueue),
+            _cts.Token);
+
+        if (resp.IsError)
+        {
+            Status = resp.Message ?? Каталог.T("ui-apply-failed");
+        }
+        else
+        {
+            Selected.Queue = TargetMoveQueue;
+            ApplyFilter();
+            Status = Каталог.T("task-moved", ("id", Selected.Id), ("queue", TargetMoveQueue));
+            await LoadQueuesAsync();
+        }
+    }
+
     public void Shutdown() => _cts.Cancel();
+}
+
+/// <summary>Рядок черги для відображення та керування.</summary>
+public sealed partial class QueueRow : ObservableObject
+{
+    [ObservableProperty]
+    private string _name = "";
+
+    [ObservableProperty]
+    private uint _maxConcurrent;
+
+    [ObservableProperty]
+    private ulong _rateLimit;
+
+    [ObservableProperty]
+    private string? _scheduleFrom;
+
+    [ObservableProperty]
+    private string? _scheduleTo;
+
+    [ObservableProperty]
+    private string _postAction = "none";
+
+    [ObservableProperty]
+    private bool _paused;
+
+    [ObservableProperty]
+    private long _totalTasks;
+
+    [ObservableProperty]
+    private long _runningTasks;
+
+    public bool IsDefault => Name == "default";
+
+    public string DisplayName => IsDefault ? Каталог.T("ui-queue-default") : Name;
+
+    public string BadgeText => Paused
+        ? $"{DisplayName} {Каталог.T("ui-queue-paused-badge")} ({RunningTasks}/{TotalTasks})"
+        : $"{DisplayName} ({RunningTasks}/{TotalTasks})";
+
+    public QueueRow(QueueView v)
+    {
+        Update(v);
+    }
+
+    public void Update(QueueView v)
+    {
+        Name = v.Name;
+        MaxConcurrent = v.MaxConcurrent;
+        RateLimit = v.RateLimit;
+        ScheduleFrom = v.ScheduleFrom;
+        ScheduleTo = v.ScheduleTo;
+        PostAction = v.PostAction;
+        Paused = v.Paused;
+        TotalTasks = v.TotalTasks;
+        RunningTasks = v.RunningTasks;
+        OnPropertyChanged(nameof(DisplayName));
+        OnPropertyChanged(nameof(BadgeText));
+        OnPropertyChanged(nameof(IsDefault));
+    }
 }
 
 /// <summary>Один варіант якості у переліку.</summary>
@@ -788,6 +1157,12 @@ public sealed partial class TaskRow : ObservableObject
     /// <summary>Частка виконаного, 0…1 — для смужки без розкладки.</summary>
     [ObservableProperty]
     private double _fraction;
+
+    [ObservableProperty]
+    private string _queue = "default";
+
+    [ObservableProperty]
+    private bool _isVisibleInFilter = true;
 
     /// <summary>Розкладка частин. Заповнена лише для виділеного рядка.</summary>
     [ObservableProperty]
@@ -859,6 +1234,7 @@ public sealed partial class TaskRow : ObservableObject
 
         Url = view.Url;
         Dest = view.Dest;
+        Queue = string.IsNullOrEmpty(view.Queue) ? "default" : view.Queue;
 
         SegmentsText = view.Segments > 1
             ? $"{view.Segments} {Каталог.Множина(view.Segments, "ui-seg-one", "ui-seg-few", "ui-seg-many")}"

@@ -219,6 +219,10 @@ pub struct RunContext {
     ///
     /// `None` — людина не вибирала, модуль вирішує сам.
     pub variant: Option<String>,
+    /// Обмежувач швидкості для черги або завдання.
+    ///
+    /// Якщо задано, модуль використовує його замість власного внутрішнього лімітера.
+    pub limiter: Option<std::sync::Arc<crate::rate::RateLimiter>>,
 }
 
 /// Що модуль повідомляє ядру під час роботи.
@@ -613,6 +617,7 @@ mod tests {
                     cancel: Cancel::new(),
                     session: Session::default(),
                     variant: None,
+                    limiter: None,
                 },
                 &збирач,
             )
@@ -651,6 +656,7 @@ mod tests {
                     cancel: Cancel::new(),
                     session: Session::default(),
                     variant: None,
+                    limiter: None,
                 },
                 &збирач,
             )

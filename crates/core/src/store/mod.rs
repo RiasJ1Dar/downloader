@@ -7,6 +7,7 @@
 //!
 //! Розподіл простий: **база — це що качаємо, sidecar — це докуди дійшли**.
 
+pub mod queue;
 pub mod schema;
 pub mod settings;
 
@@ -17,6 +18,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 use crate::error::{Error, Result};
 use crate::segments::{Segment, SegmentTable};
 
+pub use queue::{DEFAULT_QUEUE, QueuePatch, QueueRow};
 pub use settings::{Settings, SettingsPatch};
 
 /// Ідентифікатор завдання.
@@ -85,6 +87,8 @@ pub struct Task {
     pub error: Option<String>,
     /// Обрана якість, як її назвав модуль. `None` — вибору не було.
     pub variant: Option<String>,
+    /// Назва черги, до якої належить завдання.
+    pub queue: String,
 }
 
 /// Файл усередині завдання.
@@ -121,6 +125,8 @@ pub struct NewTask {
     pub category_id: Option<i64>,
     /// Обрана якість, як її назвав модуль.
     pub variant: Option<String>,
+    /// Черга завдання. `None` — типова черга 'default'.
+    pub queue: Option<String>,
     /// Файли завдання. Для звичайного HTTP тут рівно один запис.
     pub files: Vec<NewFile>,
 }
@@ -169,13 +175,30 @@ impl Store {
             ));
         }
 
+        let q_name = new.queue.as_deref().unwrap_or(DEFAULT_QUEUE).trim();
+        queue::validate_queue_name(q_name)?;
+
         let now = now_ms();
         let tx = self.conn.transaction().map_err(db)?;
 
+        // Перевіряємо існування черги, якщо це не 'default'
+        if q_name != DEFAULT_QUEUE {
+            let exists: bool = tx
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM queue WHERE name = ?1)",
+                    params![q_name],
+                    |r| r.get(0),
+                )
+                .map_err(db)?;
+            if !exists {
+                return Err(Error::Store(format!("чергу '{q_name}' не знайдено")));
+            }
+        }
+
         tx.execute(
             "INSERT INTO task
-                (url, protocol, status, title, category_id, variant, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)",
+                (url, protocol, status, title, category_id, variant, queue_name, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)",
             params![
                 new.url,
                 new.protocol,
@@ -183,6 +206,7 @@ impl Store {
                 new.title,
                 new.category_id,
                 new.variant,
+                q_name,
                 now
             ],
         )
@@ -215,7 +239,7 @@ impl Store {
         self.conn
             .query_row(
                 "SELECT id, url, protocol, status, title, category_id,
-                        created_at, updated_at, finished_at, error, variant
+                        created_at, updated_at, finished_at, error, variant, queue_name
                  FROM task WHERE id = ?1",
                 params![id],
                 task_from_row,
@@ -235,6 +259,44 @@ impl Store {
         self.tasks_where(Some(status))
     }
 
+    /// Завдання вказаної черги, найновіші зверху.
+    pub fn tasks_in_queue(&self, queue_name: &str) -> Result<Vec<Task>> {
+        let mut stmt = self
+            .conn
+            .prepare_cached(
+                "SELECT id, url, protocol, status, title, category_id,
+                        created_at, updated_at, finished_at, error, variant, queue_name
+                 FROM task WHERE queue_name = ?1 ORDER BY id DESC",
+            )
+            .map_err(db)?;
+        let rows = stmt.query_map(params![queue_name], task_from_row).map_err(db)?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r.map_err(db)??);
+        }
+        Ok(out)
+    }
+
+    /// Завдання вказаної черги у певному стані, за зростанням id (FIFO черга).
+    pub fn queue_tasks_ordered(&self, queue_name: &str, status: Status) -> Result<Vec<Task>> {
+        let mut stmt = self
+            .conn
+            .prepare_cached(
+                "SELECT id, url, protocol, status, title, category_id,
+                        created_at, updated_at, finished_at, error, variant, queue_name
+                 FROM task WHERE queue_name = ?1 AND status = ?2 ORDER BY id ASC",
+            )
+            .map_err(db)?;
+        let rows = stmt
+            .query_map(params![queue_name, status.as_str()], task_from_row)
+            .map_err(db)?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r.map_err(db)??);
+        }
+        Ok(out)
+    }
+
     fn tasks_where(&self, status: Option<Status>) -> Result<Vec<Task>> {
         let mut out = Vec::new();
 
@@ -244,7 +306,7 @@ impl Store {
                     .conn
                     .prepare_cached(
                         "SELECT id, url, protocol, status, title, category_id,
-                                created_at, updated_at, finished_at, error, variant
+                                created_at, updated_at, finished_at, error, variant, queue_name
                          FROM task WHERE status = ?1 ORDER BY id DESC",
                     )
                     .map_err(db)?;
@@ -258,7 +320,7 @@ impl Store {
                     .conn
                     .prepare_cached(
                         "SELECT id, url, protocol, status, title, category_id,
-                                created_at, updated_at, finished_at, error, variant
+                                created_at, updated_at, finished_at, error, variant, queue_name
                          FROM task ORDER BY id DESC",
                     )
                     .map_err(db)?;
@@ -529,6 +591,83 @@ impl Store {
     pub fn save_settings(&mut self, settings: &Settings) -> Result<()> {
         settings.save(&self.conn)
     }
+
+    // ── Черги ───────────────────────────────────────────────────────────
+
+    /// Усі наявні черги завантажень.
+    pub fn queues(&self) -> Result<Vec<QueueRow>> {
+        queue::load_queues(&self.conn)
+    }
+
+    /// Черга за її назвою.
+    pub fn queue(&self, name: &str) -> Result<Option<QueueRow>> {
+        queue::load_queue_by_name(&self.conn, name.trim())
+    }
+
+    /// Створити нову чергу із заданими правилами.
+    pub fn create_queue(&mut self, name: &str, patch: &QueuePatch) -> Result<QueueRow> {
+        let now = now_ms();
+        queue::insert_queue(&self.conn, name, patch, now)
+    }
+
+    /// Змінити правила існуючої черги.
+    pub fn update_queue(&mut self, name: &str, patch: &QueuePatch) -> Result<QueueRow> {
+        queue::update_queue(&self.conn, name.trim(), patch)
+    }
+
+    /// Перейменувати чергу з оновленням усіх її завдань.
+    pub fn rename_queue(&mut self, old_name: &str, new_name: &str) -> Result<()> {
+        let old = old_name.trim();
+        let new = new_name.trim();
+        if old == DEFAULT_QUEUE {
+            return Err(Error::Store("типову чергу не можна перейменовувати".to_owned()));
+        }
+        queue::validate_queue_name(new)?;
+        if self.queue(new)?.is_some() {
+            return Err(Error::Store(format!("черга '{new}' вже існує")));
+        }
+        let tx = self.conn.transaction().map_err(db)?;
+        let changed = tx.execute(
+            "UPDATE queue SET name = ?2 WHERE name = ?1",
+            params![old, new],
+        ).map_err(db)?;
+        if changed == 0 {
+            return Err(Error::Store(format!("чергу '{old}' не знайдено")));
+        }
+        tx.execute(
+            "UPDATE task SET queue_name = ?2 WHERE queue_name = ?1",
+            params![old, new],
+        ).map_err(db)?;
+        tx.commit().map_err(db)?;
+        Ok(())
+    }
+
+    /// Видалити чергу. Її завдання автоматично повертаються в типову чергу 'default'.
+    /// Типову чергу видаляти заборонено.
+    pub fn delete_queue(&mut self, name: &str) -> Result<()> {
+        queue::delete_queue(&mut self.conn, name.trim())
+    }
+
+    /// Перенести завдання в іншу чергу.
+    pub fn set_task_queue(&mut self, task_id: TaskId, queue_name: &str) -> Result<()> {
+        let trimmed = queue_name.trim();
+        queue::validate_queue_name(trimmed)?;
+        if trimmed != DEFAULT_QUEUE && self.queue(trimmed)?.is_none() {
+            return Err(Error::Store(format!("чергу '{trimmed}' не знайдено")));
+        }
+        let now = now_ms();
+        let changed = self
+            .conn
+            .execute(
+                "UPDATE task SET queue_name = ?2, updated_at = ?3 WHERE id = ?1",
+                params![task_id, trimmed, now],
+            )
+            .map_err(db)?;
+        if changed == 0 {
+            return Err(Error::Store(format!("завдання {task_id} не знайдено")));
+        }
+        Ok(())
+    }
 }
 
 fn task_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Result<Task>> {
@@ -546,6 +685,7 @@ fn task_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Result<Task>> {
         finished_at: row.get(8).unwrap_or_default(),
         error: row.get(9).unwrap_or_default(),
         variant: row.get(10).unwrap_or_default(),
+        queue: row.get(11).unwrap_or_else(|_| DEFAULT_QUEUE.to_owned()),
     }))
 }
 
@@ -579,6 +719,7 @@ mod tests {
             title: None,
             category_id: None,
             variant: None,
+            queue: None,
             files: vec![NewFile {
                 path: PathBuf::from(path),
                 size: Some(1000),
@@ -648,6 +789,7 @@ mod tests {
             title: None,
             category_id: None,
             variant: None,
+            queue: None,
             files: Vec::new(),
         };
 
@@ -667,6 +809,7 @@ mod tests {
             title: Some("Фільм".to_owned()),
             category_id: None,
             variant: None,
+            queue: None,
             files: vec![
                 NewFile {
                     path: PathBuf::from("video.m4s"),
@@ -994,5 +1137,94 @@ mod tests {
             )
             .unwrap();
         assert_eq!(n, "4");
+    }
+
+    #[test]
+    fn типова_черга_існує_від_початку() {
+        let s = Store::in_memory().unwrap();
+        let queues = s.queues().unwrap();
+        assert_eq!(queues.len(), 1);
+        assert_eq!(queues[0].name, DEFAULT_QUEUE);
+        assert_eq!(queues[0].max_concurrent, 3);
+        assert_eq!(queues[0].rate_limit, 0);
+        assert!(!queues[0].paused);
+    }
+
+    #[test]
+    fn створення_налаштування_перейменування_та_видалення_черги() {
+        let mut s = Store::in_memory().unwrap();
+
+        // Створення черги
+        let patch = QueuePatch {
+            max_concurrent: Some(5),
+            rate_limit: Some(1024 * 1024),
+            paused: Some(false),
+            schedule_from: Some("23:00".to_owned()),
+            schedule_to: Some("07:00".to_owned()),
+            post_action: Some("sleep".to_owned()),
+        };
+        let q = s.create_queue("night", &patch).unwrap();
+        assert_eq!(q.name, "night");
+        assert_eq!(q.max_concurrent, 5);
+        assert_eq!(q.rate_limit, 1024 * 1024);
+        assert_eq!(q.schedule_from, Some(23 * 60));
+        assert_eq!(q.schedule_to, Some(7 * 60));
+        assert_eq!(q.post_action, PostAction::Sleep);
+
+        // Додавання завдання до нової черги
+        let mut task_req = звичайне_завдання("https://e.com/iso.zip", "iso.zip");
+        task_req.queue = Some("night".to_owned());
+        let tid = s.add_task(&task_req).unwrap();
+
+        let t = s.task(tid).unwrap().unwrap();
+        assert_eq!(t.queue, "night");
+
+        let night_tasks = s.tasks_in_queue("night").unwrap();
+        assert_eq!(night_tasks.len(), 1);
+        assert_eq!(night_tasks[0].id, tid);
+
+        // Оновлення параметрів черги
+        let update_patch = QueuePatch {
+            max_concurrent: Some(2),
+            paused: Some(true),
+            ..QueuePatch::default()
+        };
+        let updated = s.update_queue("night", &update_patch).unwrap();
+        assert_eq!(updated.max_concurrent, 2);
+        assert!(updated.paused);
+        assert_eq!(updated.rate_limit, 1024 * 1024, "інші поля лишились незмінними");
+
+        // Перейменування черги
+        s.rename_queue("night", "nightly").unwrap();
+        assert!(s.queue("night").unwrap().is_none());
+        assert!(s.queue("nightly").unwrap().is_some());
+        let t_after_rename = s.task(tid).unwrap().unwrap();
+        assert_eq!(t_after_rename.queue, "nightly", "завдання отримало нове ім'я черги");
+
+        // Перенесення завдання між чергами
+        s.set_task_queue(tid, DEFAULT_QUEUE).unwrap();
+        let t_moved = s.task(tid).unwrap().unwrap();
+        assert_eq!(t_moved.queue, DEFAULT_QUEUE);
+
+        s.set_task_queue(tid, "nightly").unwrap();
+
+        // Видалення черги повертає завдання в default
+        s.delete_queue("nightly").unwrap();
+        assert!(s.queue("nightly").unwrap().is_none());
+        let t_restored = s.task(tid).unwrap().unwrap();
+        assert_eq!(t_restored.queue, DEFAULT_QUEUE, "після видалення черги завдання перейшло в default");
+
+        // Заборона видалення типової черги
+        assert!(s.delete_queue(DEFAULT_QUEUE).is_err());
+        // Заборона перейменування типової черги
+        assert!(s.rename_queue(DEFAULT_QUEUE, "other").is_err());
+    }
+
+    #[test]
+    fn додавання_в_неіснуючу_чергу_заборонено() {
+        let mut s = Store::in_memory().unwrap();
+        let mut task_req = звичайне_завдання("https://e.com/test", "test");
+        task_req.queue = Some("ghost_queue".to_owned());
+        assert!(s.add_task(&task_req).is_err());
     }
 }

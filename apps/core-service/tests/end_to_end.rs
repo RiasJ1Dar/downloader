@@ -146,6 +146,7 @@ async fn ядро_качає_файл_на_запит_клієнта() -> anyhow
             cookies: None,
             referer: None,
             variant: None,
+            queue: None,
         },
     )
     .await?;
@@ -211,6 +212,7 @@ async fn ядро_качає_hls_vod() -> anyhow::Result<()> {
             cookies: None,
             referer: None,
             variant: None,
+            queue: None,
         },
     )
     .await?;
@@ -260,6 +262,7 @@ async fn клієнт_бачить_завдання_у_списку() -> anyhow:
             cookies: None,
             referer: None,
             variant: None,
+            queue: None,
         },
     )
     .await?;
@@ -498,6 +501,7 @@ async fn список_завдань_переживає_рестарт_ядра(
             cookies: None,
             referer: None,
             variant: None,
+            queue: None,
         },
     )
     .await?;
@@ -558,5 +562,147 @@ async fn список_завдань_переживає_рестарт_ядра(
     let _ = child.wait();
     let _ = std::fs::remove_dir_all(&downloads);
     server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn керування_іменованими_чергами_через_ipc() -> anyhow::Result<()> {
+    let ядро = Ядро::запустити("queues_ipc")?;
+    let mut client = ядро.дочекатись().await?;
+    привітатись(&mut client).await?;
+
+    // 1. Початковий список черг має містити "default"
+    write_frame(&mut client, &Request::Queues).await?;
+    match read_frame::<_, Response>(&mut client).await? {
+        Response::Queues { queues } => {
+            assert_eq!(queues.len(), 1);
+            assert_eq!(queues[0].name, "default");
+        }
+        other => anyhow::bail!("очікували Queues, отримали {other:?}"),
+    }
+
+    // 2. Створення черги
+    write_frame(
+        &mut client,
+        &Request::QueueCreate {
+            name: "fast".to_owned(),
+            max_concurrent: Some(5),
+            rate_limit: None,
+            schedule_from: None,
+            schedule_to: None,
+            post_action: None,
+        },
+    )
+    .await?;
+    match read_frame::<_, Response>(&mut client).await? {
+        Response::Ok => {}
+        other => anyhow::bail!("очікували Ok, отримали {other:?}"),
+    }
+
+    // 3. Зміна параметрів черги
+    write_frame(
+        &mut client,
+        &Request::QueueConfigure {
+            name: "fast".to_owned(),
+            max_concurrent: Some(10),
+            rate_limit: Some(500_000),
+            schedule_from: None,
+            schedule_to: None,
+            post_action: Some("sleep".to_owned()),
+        },
+    )
+    .await?;
+    match read_frame::<_, Response>(&mut client).await? {
+        Response::Ok => {}
+        other => anyhow::bail!("очікували Ok, отримали {other:?}"),
+    }
+
+    // 4. Перевірка оновленого списку черг
+    write_frame(&mut client, &Request::Queues).await?;
+    match read_frame::<_, Response>(&mut client).await? {
+        Response::Queues { queues } => {
+            assert_eq!(queues.len(), 2);
+            let Some(fast) = queues.iter().find(|q| q.name == "fast") else {
+                anyhow::bail!("не знайдено fast");
+            };
+            assert_eq!(fast.max_concurrent, 10);
+            assert_eq!(fast.rate_limit, 500_000);
+            assert_eq!(fast.post_action, "sleep");
+        }
+        other => anyhow::bail!("очікували Queues, отримали {other:?}"),
+    }
+
+    // 5. Перейменування черги
+    write_frame(
+        &mut client,
+        &Request::QueueRename {
+            old_name: "fast".to_owned(),
+            new_name: "turbo".to_owned(),
+        },
+    )
+    .await?;
+    match read_frame::<_, Response>(&mut client).await? {
+        Response::Ok => {}
+        other => anyhow::bail!("очікували Ok, отримали {other:?}"),
+    }
+
+    // 6. Пауза та відновлення черги
+    write_frame(
+        &mut client,
+        &Request::QueuePause {
+            name: "turbo".to_owned(),
+        },
+    )
+    .await?;
+    match read_frame::<_, Response>(&mut client).await? {
+        Response::Ok => {}
+        other => anyhow::bail!("очікували Ok, отримали {other:?}"),
+    }
+
+    write_frame(&mut client, &Request::Queues).await?;
+    match read_frame::<_, Response>(&mut client).await? {
+        Response::Queues { queues } => {
+            let Some(turbo) = queues.iter().find(|q| q.name == "turbo") else {
+                anyhow::bail!("не знайдено turbo");
+            };
+            assert!(turbo.paused);
+        }
+        other => anyhow::bail!("очікували Queues, отримали {other:?}"),
+    }
+
+    write_frame(
+        &mut client,
+        &Request::QueueResume {
+            name: "turbo".to_owned(),
+        },
+    )
+    .await?;
+    match read_frame::<_, Response>(&mut client).await? {
+        Response::Ok => {}
+        other => anyhow::bail!("очікували Ok, отримали {other:?}"),
+    }
+
+    // 7. Видалення черги
+    write_frame(
+        &mut client,
+        &Request::QueueDelete {
+            name: "turbo".to_owned(),
+        },
+    )
+    .await?;
+    match read_frame::<_, Response>(&mut client).await? {
+        Response::Ok => {}
+        other => anyhow::bail!("очікували Ok, отримали {other:?}"),
+    }
+
+    write_frame(&mut client, &Request::Queues).await?;
+    match read_frame::<_, Response>(&mut client).await? {
+        Response::Queues { queues } => {
+            assert_eq!(queues.len(), 1);
+            assert_eq!(queues[0].name, "default");
+        }
+        other => anyhow::bail!("очікували Queues, отримали {other:?}"),
+    }
+
     Ok(())
 }
