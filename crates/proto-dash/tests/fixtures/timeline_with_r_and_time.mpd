@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<MPD xmlns="urn:mpeg:dash:schema:mpd:2011"
+     profiles="urn:mpeg:dash:profile:isoff-live:2011"
+     type="static"
+     mediaPresentationDuration="PT30S"
+     minBufferTime="PT2S">
+  <Period id="p0">
+    <AdaptationSet id="0" contentType="video" mimeType="video/mp4" width="1280" height="720">
+      <SegmentTemplate timescale="1000"
+                       initialization="init-$RepresentationID$.mp4"
+                       media="chunk-$RepresentationID$-$Time$.m4s">
+        <SegmentTimeline>
+          <S t="0" d="2000" r="3" />
+          <S d="1000" r="1" />
+        </SegmentTimeline>
+      </SegmentTemplate>
+      <Representation id="v720" bandwidth="2500000" codecs="avc1.4d401f" />
+    </AdaptationSet>
+    <AdaptationSet id="1" contentType="audio" mimeType="audio/mp4">
+      <SegmentTemplate timescale="1000"
+                       initialization="init-$RepresentationID$.mp4"
+                       media="audio-$RepresentationID$-$Time$.m4s">
+        <SegmentTimeline>
+          <S t="0" d="5000" r="1" />
+        </SegmentTimeline>
+      </SegmentTemplate>
+      <Representation id="a128" bandwidth="128000" codecs="mp4a.40.2" />
+    </AdaptationSet>
+  </Period>
+</MPD>

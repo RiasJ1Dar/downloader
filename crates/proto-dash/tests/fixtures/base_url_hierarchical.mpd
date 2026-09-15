@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<MPD xmlns="urn:mpeg:dash:schema:mpd:2011"
+     profiles="urn:mpeg:dash:profile:isoff-live:2011"
+     type="static"
+     mediaPresentationDuration="PT10S"
+     minBufferTime="PT2S">
+  <BaseURL>media/</BaseURL>
+  <Period id="p0" duration="PT10S">
+    <BaseURL>stream1/</BaseURL>
+    <AdaptationSet id="0" contentType="video" mimeType="video/mp4" width="640" height="360">
+      <BaseURL>video/</BaseURL>
+      <SegmentList>
+        <Initialization sourceURL="init.mp4" />
+        <SegmentURL media="seg-1.m4s" />
+        <SegmentURL media="https://cdn.other.com/seg-2.m4s" />
+      </SegmentList>
+      <Representation id="v360" bandwidth="600000" />
+    </AdaptationSet>
+  </Period>
+</MPD>

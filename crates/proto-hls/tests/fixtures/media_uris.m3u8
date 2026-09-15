@@ -1,0 +1,13 @@
+#EXTM3U
+#EXT-X-VERSION:3
+#EXT-X-TARGETDURATION:4
+#EXT-X-MEDIA-SEQUENCE:1
+#EXTINF:4.0,
+segment-relative.ts
+#EXTINF:4.0,
+subfolder/segment-sub.ts
+#EXTINF:4.0,
+/root-relative/segment-root.ts
+#EXTINF:4.0,
+https://cdn.another.com/cdn/segment-abs.ts
+#EXT-X-ENDLIST

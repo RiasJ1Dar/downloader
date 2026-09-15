@@ -6,6 +6,29 @@
       chrome.i18n.getMessage("btnDownload")) ||
     "Завантажити";
 
+  // Сніффер потоків через PerformanceObserver (працює для fetch, XHR, MSE)
+  try {
+    const checkUrl = (url) => {
+      if (!url || typeof url !== "string") return;
+      if (/\.m3u8(\?|$)/i.test(url) || /\.mpd(\?|$)/i.test(url)) {
+        chrome.runtime.sendMessage({ op: "manifest_detected", url: url });
+      }
+    };
+
+    if (typeof performance !== "undefined" && performance.getEntriesByType) {
+      performance.getEntriesByType("resource").forEach((e) => checkUrl(e.name));
+    }
+
+    if (typeof PerformanceObserver !== "undefined") {
+      const observer = new PerformanceObserver((list) => {
+        for (const entry of list.getEntries()) {
+          checkUrl(entry.name);
+        }
+      });
+      observer.observe({ entryTypes: ["resource"] });
+    }
+  } catch (_) {}
+
   function attach(video) {
     if (video.dataset.dlBtn) return;
     video.dataset.dlBtn = "1";
@@ -22,7 +45,11 @@
     btn.addEventListener("click", (ev) => {
       ev.preventDefault();
       ev.stopPropagation();
-      const media = video.currentSrc || video.src || "";
+      let media = video.currentSrc || video.src || "";
+      if (!media || media.startsWith("blob:")) {
+        const source = video.querySelector("source");
+        if (source && source.src) media = source.src;
+      }
       chrome.runtime.sendMessage({
         op: "add",
         page: location.href,
