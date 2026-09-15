@@ -65,18 +65,27 @@ async fn main() -> anyhow::Result<()> {
     i18n::init(cli.lang.as_deref());
     let ставити_nmhost = cli.pipe.is_none();
 
+    let exe = std::env::current_exe().ok();
+    let is_portable = downloader_winutil::is_portable();
+    if is_portable {
+        tracing::info!("активовано портативний режим (знайдено portable.txt)");
+    }
+
     let data_dir = cli
         .db
         .clone()
         .and_then(|p| p.parent().map(std::path::Path::to_path_buf))
-        .unwrap_or_else(default_data_dir);
+        .unwrap_or_else(|| downloader_winutil::data_dir_for_exe(exe.as_deref()));
     std::fs::create_dir_all(&data_dir)
         .with_context(|| format!("не вдалося створити теку даних {}", data_dir.display()))?;
 
     let db = cli.db.unwrap_or_else(|| data_dir.join("tasks.db"));
-    let downloads = cli.downloads.unwrap_or_else(default_downloads_dir);
+    let downloads = cli
+        .downloads
+        .unwrap_or_else(|| downloader_winutil::downloads_dir_for_exe(exe.as_deref()));
     std::fs::create_dir_all(&downloads)
         .with_context(|| format!("не вдалося створити теку завантажень {}", downloads.display()))?;
+
 
     // ⚠️ Канал займається **до** відкриття бази й навмисно першим.
     //
@@ -175,24 +184,4 @@ async fn main() -> anyhow::Result<()> {
     }
 
     Ok(())
-}
-
-/// Тека даних програми.
-fn default_data_dir() -> PathBuf {
-    std::env::var_os("LOCALAPPDATA")
-        .or_else(|| std::env::var_os("HOME"))
-        .map_or_else(
-            || PathBuf::from("."),
-            |base| PathBuf::from(base).join("Downloader"),
-        )
-}
-
-/// Тека завантажень за замовчуванням.
-fn default_downloads_dir() -> PathBuf {
-    std::env::var_os("USERPROFILE")
-        .or_else(|| std::env::var_os("HOME"))
-        .map_or_else(
-            || PathBuf::from("."),
-            |home| PathBuf::from(home).join("Downloads"),
-        )
 }

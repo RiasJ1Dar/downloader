@@ -84,6 +84,100 @@ pub fn unique_path(desired: &Path) -> PathBuf {
     }
 }
 
+/// Назва мітки портативного режиму поруч із виконуваним файлом.
+pub const PORTABLE_MARKER: &str = "portable.txt";
+
+/// Перевірити, чи тека містить маркер `portable.txt`.
+#[must_use]
+pub fn is_portable_dir(dir: &Path) -> bool {
+    dir.join(PORTABLE_MARKER).is_file()
+}
+
+/// Перевірити, чи активний портативний режим.
+///
+/// Портативний режим увімкнено, якщо поруч із поточним виконуваним файлом
+/// (`std::env::current_exe()`) існує файл `portable.txt`.
+#[must_use]
+pub fn is_portable() -> bool {
+    portable_marker_dir().is_some()
+}
+
+/// Повернути теку, в якій знайдено маркер `portable.txt` поруч із exe (якщо є).
+#[must_use]
+pub fn portable_marker_dir() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let dir = exe.parent()?;
+    if is_portable_dir(dir) {
+        Some(dir.to_path_buf())
+    } else {
+        None
+    }
+}
+
+/// Визначити теку даних програми:
+/// - Якщо передано шлях до exe (або знайдено поточний exe) і поруч є `portable.txt` → тека бінарника.
+/// - Інакше → `%LOCALAPPDATA%\Downloader` (на Windows) або `$HOME/.local/share/Downloader`.
+#[must_use]
+pub fn data_dir_for_exe(exe: Option<&Path>) -> PathBuf {
+    if let Some(exe_path) = exe
+        && let Some(parent) = exe_path.parent()
+        && is_portable_dir(parent)
+    {
+        return parent.to_path_buf();
+    }
+    if let Some(dir) = portable_marker_dir() {
+        return dir;
+    }
+
+    default_data_dir()
+}
+
+/// Тека даних програми для поточного процесу.
+#[must_use]
+pub fn app_data_dir() -> PathBuf {
+    data_dir_for_exe(std::env::current_exe().ok().as_deref())
+}
+
+/// Типова тека даних без портативного режиму (`%LOCALAPPDATA%\Downloader`).
+#[must_use]
+pub fn default_data_dir() -> PathBuf {
+    std::env::var_os("LOCALAPPDATA")
+        .or_else(|| std::env::var_os("HOME"))
+        .map_or_else(
+            || PathBuf::from("."),
+            |base| PathBuf::from(base).join("Downloader"),
+        )
+}
+
+/// Типова тека завантажень:
+/// - У портативному режимі → `Downloads` поруч із виконуваним файлом.
+/// - У звичайному режимі → `%USERPROFILE%\Downloads` (або `$HOME/Downloads`).
+#[must_use]
+pub fn downloads_dir_for_exe(exe: Option<&Path>) -> PathBuf {
+    if let Some(exe_path) = exe
+        && let Some(parent) = exe_path.parent()
+        && is_portable_dir(parent)
+    {
+        return parent.join("Downloads");
+    }
+    if let Some(dir) = portable_marker_dir() {
+        return dir.join("Downloads");
+    }
+
+    default_downloads_dir()
+}
+
+/// Типова тека завантажень програми у звичайному режимі.
+#[must_use]
+pub fn default_downloads_dir() -> PathBuf {
+    std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .map_or_else(
+            || PathBuf::from("."),
+            |home| PathBuf::from(home).join("Downloads"),
+        )
+}
+
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,
@@ -210,4 +304,37 @@ mod tests {
 
         assert_eq!(out.matches("\\\\?\\").count(), 1, "{out}");
     }
+
+    #[test]
+    fn звичайний_режим_без_маркера_повертає_localappdata() {
+        let dir = TempDir::new("regular");
+        let fake_exe = dir.0.join("downloader-core.exe");
+        std::fs::write(&fake_exe, b"").unwrap();
+
+        assert!(!is_portable_dir(&dir.0));
+        let data = data_dir_for_exe(Some(&fake_exe));
+        assert_eq!(data, default_data_dir());
+        let dl = downloads_dir_for_exe(Some(&fake_exe));
+        assert_eq!(dl, default_downloads_dir());
+    }
+
+    #[test]
+    fn портативний_режим_з_маркером_кладе_все_поруч_із_exe() {
+        let dir = TempDir::new("portable");
+        let fake_exe = dir.0.join("downloader-core.exe");
+        let marker = dir.0.join(PORTABLE_MARKER);
+        std::fs::write(&fake_exe, b"").unwrap();
+        std::fs::write(&marker, b"").unwrap();
+
+        assert!(is_portable_dir(&dir.0));
+        let data = data_dir_for_exe(Some(&fake_exe));
+        assert_eq!(data, dir.0, "у портативному режимі база має лягати в теку exe");
+        let dl = downloads_dir_for_exe(Some(&fake_exe));
+        assert_eq!(
+            dl,
+            dir.0.join("Downloads"),
+            "завантаження мають бути у підтеці Downloads поруч"
+        );
+    }
 }
+
