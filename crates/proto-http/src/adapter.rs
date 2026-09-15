@@ -322,6 +322,8 @@ mod tests {
                 session,
                 variant: None,
                 limiter: None,
+                max_duration: None,
+                rewind: false,
             },
             &Німий,
         )

@@ -1176,6 +1176,8 @@ mod tests {
                 session: Session::default(),
                 variant: None,
                 limiter: None,
+                max_duration: None,
+                rewind: false,
             },
             &Німий,
         )
@@ -1216,6 +1218,8 @@ mod tests {
                 session: Session::default(),
                 variant: None,
                 limiter: None,
+                max_duration: None,
+                rewind: false,
             },
             &Німий,
         )

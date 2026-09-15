@@ -76,6 +76,10 @@ struct Live {
     parts: Vec<downloader_core::protocol::PartProgress>,
     /// Іменована черга.
     queue: String,
+    /// Обмеження тривалості (для live-потоків).
+    max_duration: Option<std::time::Duration>,
+    /// Вимагати запис від початку live-буфера.
+    rewind: bool,
 }
 
 impl Live {
@@ -291,6 +295,8 @@ impl Engine {
                 targets,
                 parts: Vec::new(),
                 queue: t.queue,
+                max_duration: None,
+                rewind: false,
             });
         }
         drop(store);
@@ -431,6 +437,7 @@ impl Engine {
     }
 
     /// Додати завантаження й одразу почати його.
+    #[allow(clippy::too_many_arguments)]
     pub async fn add(
         self: &Arc<Self>,
         url: &str,
@@ -439,6 +446,8 @@ impl Engine {
         session: Session,
         variant: Option<String>,
         queue: Option<String>,
+        max_duration: Option<std::time::Duration>,
+        rewind: bool,
     ) -> anyhow::Result<i64> {
         // Хто це качатиме, вирішує реєстр, а не ядро. Саме тут і живе межа.
         let Some(protocol) = self.registry.find(url) else {
@@ -597,6 +606,8 @@ impl Engine {
                     variant: variant.clone(),
                     parts: Vec::new(),
                     queue: actual_queue.clone(),
+                    max_duration,
+                    rewind,
                 },
             );
         }
@@ -611,6 +622,8 @@ impl Engine {
                 session,
                 variant,
                 actual_queue,
+                max_duration,
+                rewind,
             );
         } else {
             self.set_status(id, Status::Queued, None);
@@ -635,6 +648,8 @@ impl Engine {
         session: Session,
         variant: Option<String>,
         queue_name: String,
+        max_duration: Option<std::time::Duration>,
+        rewind: bool,
     ) {
         tokio::spawn(async move {
             let Some(module) = self.registry.by_name(&protocol) else {
@@ -696,6 +711,8 @@ impl Engine {
                 session,
                 variant,
                 limiter,
+                max_duration,
+                rewind,
             };
 
             match module.run(ctx.clone(), &sink).await {
@@ -827,13 +844,34 @@ impl Engine {
                     task.session.clone(),
                     task.variant.clone(),
                     task.queue.clone(),
+                    task.max_duration,
+                    task.rewind,
                 )
             };
 
-            let (id, protocol, url, targets, session, variant, queue_name) = job;
+            let (
+                id,
+                protocol,
+                url,
+                targets,
+                session,
+                variant,
+                queue_name,
+                max_duration,
+                rewind,
+            ) = job;
             self.set_status(id, Status::Running, None);
-            self.clone()
-                .spawn_download(id, protocol, url, targets, session, variant, queue_name);
+            self.clone().spawn_download(
+                id,
+                protocol,
+                url,
+                targets,
+                session,
+                variant,
+                queue_name,
+                max_duration,
+                rewind,
+            );
         }
     }
 
@@ -1496,6 +1534,8 @@ mod tests {
             targets: vec![],
             parts: Vec::new(),
             queue: downloader_core::store::DEFAULT_QUEUE.to_owned(),
+            max_duration: None,
+            rewind: false,
         }
     }
 

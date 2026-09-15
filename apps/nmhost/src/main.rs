@@ -110,6 +110,8 @@ async fn додати_в_ядро(msg: FromExt) -> Result<i64> {
             referer: msg.referer,
             variant: None,
             queue: None,
+            duration: None,
+            rewind: false,
         },
     )
     .await?;

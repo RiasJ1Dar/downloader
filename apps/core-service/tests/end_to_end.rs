@@ -147,6 +147,8 @@ async fn ядро_качає_файл_на_запит_клієнта() -> anyhow
             referer: None,
             variant: None,
             queue: None,
+            duration: None,
+            rewind: false,
         },
     )
     .await?;
@@ -213,6 +215,8 @@ async fn ядро_качає_hls_vod() -> anyhow::Result<()> {
             referer: None,
             variant: None,
             queue: None,
+            duration: None,
+            rewind: false,
         },
     )
     .await?;
@@ -263,6 +267,8 @@ async fn клієнт_бачить_завдання_у_списку() -> anyhow:
             referer: None,
             variant: None,
             queue: None,
+            duration: None,
+            rewind: false,
         },
     )
     .await?;
@@ -502,6 +508,8 @@ async fn список_завдань_переживає_рестарт_ядра(
             referer: None,
             variant: None,
             queue: None,
+            duration: None,
+            rewind: false,
         },
     )
     .await?;

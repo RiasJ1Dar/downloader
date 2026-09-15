@@ -65,6 +65,12 @@ pub enum Request {
         /// Черга завантаження. `None` — типова черга 'default'.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         queue: Option<String>,
+        /// Обмеження тривалості (для live-потоків).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        duration: Option<String>,
+        /// Вимагати запис від початку live-буфера (перемотування назад / DVR).
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        rewind: bool,
     },
 
     /// Список завдань.
@@ -384,6 +390,8 @@ mod tests {
             referer: None,
             variant: None,
             queue: None,
+            duration: None,
+            rewind: false,
         };
 
         let json = serde_json::to_string(&req).unwrap();
@@ -419,6 +427,8 @@ mod tests {
                 referer,
                 variant,
                 queue,
+                duration,
+                rewind,
             } => {
                 assert!(variant.is_none(), "старий клієнт варіанта не шле");
                 assert_eq!(url, "https://e.com/a.bin");
@@ -427,6 +437,8 @@ mod tests {
                 assert!(cookies.is_none());
                 assert!(referer.is_none());
                 assert!(queue.is_none());
+                assert!(duration.is_none());
+                assert!(!rewind);
             }
             other => panic!("розібралось не в те: {other:?}"),
         }
@@ -442,15 +454,19 @@ mod tests {
             referer: Some("https://e.com/page".to_owned()),
             variant: None,
             queue: None,
+            duration: Some("10m".to_owned()),
+            rewind: true,
         };
         let json = serde_json::to_string(&req).unwrap();
         let back: Request = serde_json::from_str(&json).unwrap();
         match back {
             Request::Add {
-                cookies, referer, ..
+                cookies, referer, duration, rewind, ..
             } => {
                 assert_eq!(cookies.as_deref(), Some("n=v; n2=v2"));
                 assert_eq!(referer.as_deref(), Some("https://e.com/page"));
+                assert_eq!(duration.as_deref(), Some("10m"));
+                assert!(rewind);
             }
             other => panic!("розібралось не в те: {other:?}"),
         }

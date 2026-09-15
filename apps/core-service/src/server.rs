@@ -141,10 +141,31 @@ async fn dispatch(req: Request, engine: &Arc<Engine>) -> Response {
             referer,
             variant,
             queue,
+            duration,
+            rewind,
         } => {
             let session = downloader_core::protocol::Session::from_parts(cookies, referer);
+            let max_duration = match duration.as_deref().map(downloader_core::protocol::parse_duration) {
+                Some(Ok(d)) => Some(d),
+                Some(Err(e)) => {
+                    return Response::Error {
+                        code: ErrorCode::Internal,
+                        message: e.to_string(),
+                    };
+                }
+                None => None,
+            };
             match engine
-                .add(&url, dest.map(Into::into), parts, session, variant, queue)
+                .add(
+                    &url,
+                    dest.map(Into::into),
+                    parts,
+                    session,
+                    variant,
+                    queue,
+                    max_duration,
+                    rewind,
+                )
                 .await
             {
                 Ok(id) => Response::Added { id },
