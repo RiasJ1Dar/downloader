@@ -23,6 +23,7 @@ use downloader_core::protocol::{
     PlannedFile, Probed, Progress, ProgressSink, Protocol, RateLimitSupport, ResumeBlob,
     RunContext, Session,
 };
+use downloader_core::RateLimiter;
 use reqwest::Client;
 
 use crate::download::{DownloadError, Options, download_with_probe};
@@ -54,6 +55,8 @@ pub struct HttpProtocol {
     client: Client,
     /// Стеля швидкості. Змінюється ззовні, тому за м'ютексом.
     rate_limit: Mutex<u64>,
+    /// Обмежувач швидкості для активних завантажень.
+    limiter: Arc<RateLimiter>,
     /// Cookies / Referer останнього `set_session`. Для `probe`, де немає
     /// [`RunContext`]. `run` бере сесію з контексту, щоб паралельні
     /// завдання не перетирали одне одному.
@@ -70,6 +73,7 @@ impl HttpProtocol {
         Ok(Self {
             client,
             rate_limit: Mutex::new(0),
+            limiter: Arc::new(RateLimiter::unlimited()),
             session: Mutex::new(Session::default()),
             parts,
         })
@@ -147,6 +151,7 @@ impl Protocol for HttpProtocol {
         let опції = Options {
             parts: self.parts,
             rate_limit: self.rate_limit.lock().map(|g| *g).unwrap_or(0),
+            limiter: Some(self.limiter.clone()),
             cancel: Some(ctx.cancel.clone()),
             on_progress: Some(Arc::new(move |done, segments, parts| {
                 // Помилка надсилання означає лише, що слухач пішов, —
@@ -210,6 +215,7 @@ impl Protocol for HttpProtocol {
         match self.rate_limit.lock() {
             Ok(mut g) => {
                 *g = bytes_per_sec;
+                self.limiter.set_limit(bytes_per_sec);
                 RateLimitSupport::Applied
             }
             Err(_) => RateLimitSupport::Unsupported,

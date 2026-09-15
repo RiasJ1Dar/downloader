@@ -19,6 +19,7 @@ m3u8-rs.workspace = true
 aes.workspace = true
 cbc.workspace = true
 bytes.workspace = true
+futures-util.workspace = true
 hex.workspace = true
 
 [dev-dependencies]

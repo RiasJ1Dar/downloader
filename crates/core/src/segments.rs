@@ -28,6 +28,8 @@
 //! Порушення будь-якого — це биті дані на диску, тому перевіряється тестами
 //! після кожної операції, а не «на око».
 
+use std::collections::HashMap;
+
 use crate::error::{Error, Result};
 
 /// Стабільний ідентифікатор сегмента.
@@ -89,6 +91,8 @@ pub struct SegmentTable {
     segments: Vec<Segment>,
     total: u64,
     next_id: SegmentId,
+    /// Активні резервації запису під час паралельної роботи воркерів.
+    reservations: HashMap<SegmentId, u64>,
 }
 
 impl SegmentTable {
@@ -107,6 +111,7 @@ impl SegmentTable {
             }],
             total,
             next_id: 1,
+            reservations: HashMap::new(),
         }
     }
 
@@ -122,6 +127,7 @@ impl SegmentTable {
                 segments: Vec::new(),
                 total: 0,
                 next_id: 0,
+                reservations: HashMap::new(),
             };
         }
 
@@ -159,6 +165,7 @@ impl SegmentTable {
             segments,
             total,
             next_id: parts as SegmentId,
+            reservations: HashMap::new(),
         }
     }
 
@@ -174,6 +181,7 @@ impl SegmentTable {
             segments,
             total,
             next_id,
+            reservations: HashMap::new(),
         };
         table.check()?;
         Ok(table)
@@ -245,7 +253,49 @@ impl SegmentTable {
         }
 
         seg.done = new_done;
+        if let Some(r) = self.reservations.get_mut(&id)
+            && (*r <= seg.cursor() || seg.is_complete())
+        {
+            self.reservations.remove(&id);
+        }
         Ok(())
+    }
+
+    /// Зарезервувати діапазон для запису поза м'ютексом.
+    ///
+    /// Повертає `Some((offset, bytes))` — абсолютний зсув у файлі та кількість
+    /// дозволених до запису байтів (не більшу за `want` та за доступний залишок).
+    /// Якщо в сегменті немає вільного місця — повертає `None`.
+    pub fn reserve_write(&mut self, id: SegmentId, want: u64) -> Option<(u64, u64)> {
+        let seg = self.segments.iter().find(|s| s.id == id)?;
+        let cur = *self.reservations.entry(id).or_insert_with(|| seg.cursor());
+        if cur >= seg.end {
+            return None;
+        }
+        let room = seg.end - cur;
+        let grant = want.min(room);
+        if grant == 0 {
+            return None;
+        }
+        self.reservations.insert(id, cur + grant);
+        Some((cur, grant))
+    }
+
+    /// Зафіксувати успішний запис на диск і посунути `done`.
+    pub fn commit_write(&mut self, id: SegmentId, bytes: u64) -> Result<()> {
+        self.advance(id, bytes)
+    }
+
+    /// Відкотити резервацію у разі помилки або передчасного завершення.
+    pub fn cancel_reservation(&mut self, id: SegmentId, bytes: u64) {
+        if let Some(seg) = self.segments.iter().find(|s| s.id == id)
+            && let Some(cur) = self.reservations.get_mut(&id)
+        {
+            *cur = (*cur).saturating_sub(bytes).max(seg.cursor());
+            if *cur <= seg.cursor() {
+                self.reservations.remove(&id);
+            }
+        }
     }
 
     /// **Динамічний поділ.** Забрати роботу в найповільнішого сегмента.
@@ -271,17 +321,30 @@ impl SegmentTable {
             .iter()
             .enumerate()
             .filter(|(_, s)| !s.is_complete())
-            .map(|(i, s)| (i, s.remaining()))
+            .map(|(i, s)| {
+                let reserved = self
+                    .reservations
+                    .get(&s.id)
+                    .copied()
+                    .unwrap_or_else(|| s.cursor());
+                let rem = s.end.saturating_sub(reserved);
+                (i, rem)
+            })
             .max_by_key(|&(_, rem)| rem)?;
 
         if remaining < threshold {
             return None;
         }
 
-        // Ділимо саме **залишок**, а не весь сегмент: те, що вже на диску,
-        // перекачувати немає жодних причин.
+        // Ділимо саме **незарезервований залишок**, а не весь сегмент:
+        // те, що вже на диску або саме пишеться воркером, перекачувати немає жодних причин.
         let seg = self.segments.get_mut(pos)?;
-        let split_at = seg.cursor() + remaining / 2;
+        let reserved = self
+            .reservations
+            .get(&seg.id)
+            .copied()
+            .unwrap_or_else(|| seg.cursor());
+        let split_at = reserved + remaining / 2;
         let old_end = seg.end;
         seg.end = split_at;
 
@@ -638,5 +701,42 @@ mod tests {
         let before = ids.len();
         ids.dedup();
         assert_eq!(ids.len(), before, "ідентифікатори повторились");
+    }
+
+    #[test]
+    fn резервування_не_дозволяє_вкрасти_активний_шматок() {
+        let mut t = SegmentTable::single(100);
+        let res = t.reserve_write(0, 40).expect("є 100 байтів");
+        assert_eq!(res, (0, 40));
+
+        // Залишок для крадіжки — 60. Поріг 4 -> половина 30.
+        // Новий сегмент має початись на 40 + 30 = 70.
+        let new_id = t.steal(MIN).expect("залишку 60 вистачає");
+        t.check().unwrap();
+
+        assert_eq!(range(&t, 0), (0, 70, 0));
+        assert_eq!(range(&t, new_id), (70, 100, 0));
+
+        // Тепер фіксуємо запис зарезервованих 40 байтів
+        t.commit_write(0, 40).unwrap();
+        assert_eq!(range(&t, 0), (0, 70, 40));
+        t.check().unwrap();
+    }
+
+    #[test]
+    fn відкат_резервації_повертає_залишок_у_гру() {
+        let mut t = SegmentTable::single(100);
+        let res = t.reserve_write(0, 40).expect("є 100 байтів");
+        assert_eq!(res, (0, 40));
+
+        // Відкочуємо резервацію
+        t.cancel_reservation(0, 40);
+
+        // Тепер вільний увесь залишок 100 -> поділ на 50
+        let new_id = t.steal(MIN).expect("є 100 байтів");
+        t.check().unwrap();
+
+        assert_eq!(range(&t, 0), (0, 50, 0));
+        assert_eq!(range(&t, new_id), (50, 100, 0));
     }
 }

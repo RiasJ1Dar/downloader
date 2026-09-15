@@ -26,7 +26,7 @@ use crate::error::{Error, Result};
 ///
 /// Зростає з кожною несумісною зміною. База новішої версії відкриттю не
 /// підлягає: старша програма не знає про нові поля й тихо їх загубить.
-pub const SCHEMA_VERSION: i64 = 4;
+pub const SCHEMA_VERSION: i64 = 5;
 
 /// Налаштування з'єднання.
 ///
@@ -45,6 +45,18 @@ pub fn configure(conn: &Connection) -> Result<()> {
     // раптовому вимкненні живлення не страшно — справжній стан завантаження
     // все одно живе у файлі `.dlpart` поруч із самим файлом.
     conn.pragma_update(None, "synchronous", "NORMAL")
+        .map_err(db_err)?;
+
+    // Тимчасові таблиці та індекси в оперативній пам'яті, а не на диску.
+    conn.pragma_update(None, "temp_store", "MEMORY")
+        .map_err(db_err)?;
+
+    // Кеш сторінок на 64 МБ (від'ємне число в SQLite означає кілобайти).
+    conn.pragma_update(None, "cache_size", -64000)
+        .map_err(db_err)?;
+
+    // Memory-mapped I/O на 256 МБ для швидких zero-copy операцій читання.
+    conn.pragma_update(None, "mmap_size", 268435456i64)
         .map_err(db_err)?;
 
     conn.busy_timeout(std::time::Duration::from_secs(5))
@@ -81,6 +93,9 @@ pub fn migrate(conn: &Connection) -> Result<()> {
     }
     if current < 4 {
         conn.execute_batch(V4).map_err(db_err)?;
+    }
+    if current < 5 {
+        conn.execute_batch(V5).map_err(db_err)?;
     }
 
     conn.pragma_update(None, "user_version", SCHEMA_VERSION)
@@ -175,6 +190,12 @@ ALTER TABLE file ADD COLUMN checksum TEXT;
 /// виглядає як зіпсований файл без жодної помилки в журналі.
 const V4: &str = r#"
 ALTER TABLE task ADD COLUMN variant TEXT;
+"#;
+
+/// Додаткові індекси для сортування за статусом і швидких зовнішніх ключів.
+const V5: &str = r#"
+CREATE INDEX IF NOT EXISTS idx_task_status_id ON task(status, id DESC);
+CREATE INDEX IF NOT EXISTS idx_task_category  ON task(category_id);
 "#;
 
 #[cfg(test)]

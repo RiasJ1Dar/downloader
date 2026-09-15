@@ -82,6 +82,20 @@ public sealed class SpeedChart : Control
         set => SetValue(AreaBrushProperty, value);
     }
 
+    private static readonly IPen GridPen = new Pen(new SolidColorBrush(Color.FromArgb(0x22, 0x88, 0x88, 0x88)), 1);
+    private IPen? _cachedLinePen;
+    private IBrush? _cachedLineBrush;
+
+    private IPen GetLinePen(IBrush brush)
+    {
+        if (_cachedLinePen is null || !ReferenceEquals(_cachedLineBrush, brush))
+        {
+            _cachedLineBrush = brush;
+            _cachedLinePen = new Pen(brush, 1.5);
+        }
+        return _cachedLinePen;
+    }
+
     public override void Render(DrawingContext context)
     {
         Rect поле = new(Bounds.Size);
@@ -137,7 +151,7 @@ public sealed class SpeedChart : Control
         }
 
         context.DrawGeometry(AreaBrush, null, площа);
-        context.DrawGeometry(null, new Pen(LineBrush, 1.5), крива);
+        context.DrawGeometry(null, GetLinePen(LineBrush), крива);
     }
 
     private static Point Точка(int i, double значення, double крок, double верх, Rect поле)
@@ -155,12 +169,10 @@ public sealed class SpeedChart : Control
     /// </remarks>
     private static void МалюватиСітку(DrawingContext context, Rect поле)
     {
-        var pen = new Pen(new SolidColorBrush(Color.FromArgb(0x22, 0x88, 0x88, 0x88)), 1);
-
         for (int i = 1; i <= 3; i++)
         {
             double y = Math.Round(поле.Height * i / 4.0) + 0.5;
-            context.DrawLine(pen, new Point(0, y), new Point(поле.Width, y));
+            context.DrawLine(GridPen, new Point(0, y), new Point(поле.Width, y));
         }
     }
 }

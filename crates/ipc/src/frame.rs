@@ -53,15 +53,19 @@ where
     W: AsyncWriteExt + Unpin,
     T: Serialize,
 {
-    let body = serde_json::to_vec(value).map_err(|e| FrameError::Malformed(e.to_string()))?;
+    let mut packet = Vec::with_capacity(512);
+    packet.extend_from_slice(&[0u8; 4]);
+    serde_json::to_writer(&mut packet, value).map_err(|e| FrameError::Malformed(e.to_string()))?;
 
-    if body.len() > MAX_FRAME {
-        return Err(FrameError::TooLarge { size: body.len() });
+    let body_len = packet.len() - 4;
+    if body_len > MAX_FRAME {
+        return Err(FrameError::TooLarge { size: body_len });
     }
 
-    let len = u32::try_from(body.len()).unwrap_or(u32::MAX);
-    writer.write_all(&len.to_le_bytes()).await?;
-    writer.write_all(&body).await?;
+    let len = u32::try_from(body_len).unwrap_or(u32::MAX);
+    packet[..4].copy_from_slice(&len.to_le_bytes());
+
+    writer.write_all(&packet).await?;
     writer.flush().await?;
     Ok(())
 }
