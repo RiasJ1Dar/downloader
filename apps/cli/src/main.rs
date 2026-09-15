@@ -9,6 +9,7 @@
 
 mod client;
 mod expand;
+mod update;
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -284,6 +285,27 @@ enum Command {
         /// Оболонка: pwsh, bash, zsh, fish або elvish.
         shell: ShellType,
     },
+
+    /// Перевірити наявність оновлень програми (тільки перевірка, без тихих інсталяцій).
+    Update {
+        /// Тільки перевірити наявність оновлень і звірити хеші (типово увімкнено).
+        #[arg(
+            long,
+            default_value_t = true,
+            num_args = 0..=1,
+            default_missing_value = "true",
+            action = clap::ArgAction::Set
+        )]
+        check: bool,
+
+        /// Шлях до локального файлу або URL маніфесту оновлень.
+        #[arg(long)]
+        manifest: Option<String>,
+
+        /// Звірити SHA-256 хеш завантаженого файлу з маніфестом.
+        #[arg(long)]
+        verify_file: Option<PathBuf>,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -394,6 +416,19 @@ async fn main() -> Result<()> {
         Command::Completions { shell } => {
             let mut cmd = Cli::command();
             clap_complete::generate(shell.to_shell(), &mut cmd, "dl", &mut std::io::stdout());
+        }
+
+        Command::Update {
+            check,
+            manifest,
+            verify_file,
+        } => {
+            if !check {
+                eprintln!("Тихе автооновлення заборонено проєктом (безпека: 10 Автооновлення.md).");
+                eprintln!("Для перевірки релізів використовуйте: dl update --check");
+                return Ok(());
+            }
+            update::check_update(&client, manifest.as_deref(), verify_file.as_deref()).await?;
         }
 
         Command::Add {
@@ -1487,6 +1522,54 @@ mod tests {
                 shell: ShellType::Elvish
             }
         ));
+    }
+
+    #[test]
+    fn clap_розбирає_update_check() {
+        Cli::command().debug_assert();
+
+        let cli = Cli::try_parse_from(["dl", "update"]).expect("dl update");
+        assert!(matches!(
+            cli.command,
+            Command::Update {
+                check: true,
+                manifest: None,
+                verify_file: None,
+            }
+        ));
+
+        let cli = Cli::try_parse_from(["dl", "update", "--check"]).expect("dl update --check");
+        assert!(matches!(
+            cli.command,
+            Command::Update {
+                check: true,
+                manifest: None,
+                verify_file: None,
+            }
+        ));
+
+        let cli = Cli::try_parse_from([
+            "dl",
+            "update",
+            "--manifest",
+            "my_update.json",
+            "--verify-file",
+            "package.msi",
+        ])
+        .expect("dl update with args");
+
+        match cli.command {
+            Command::Update {
+                check,
+                manifest,
+                verify_file,
+            } => {
+                assert!(check);
+                assert_eq!(manifest.as_deref(), Some("my_update.json"));
+                assert_eq!(verify_file.unwrap().to_str(), Some("package.msi"));
+            }
+            _ => panic!("очікувався Command::Update"),
+        }
     }
 
     #[test]

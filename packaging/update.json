@@ -1,0 +1,23 @@
+{
+  "version": "0.1.0",
+  "min_supported_version": "0.1.0",
+  "release_date": "2026-09-15T00:00:00Z",
+  "changelog_url": "https://github.com/RiasJ1Dar/downloader/blob/master/CHANGELOG.txt",
+  "packages": [
+    {
+      "name": "Downloader-0.1.0-web.msi",
+      "type": "msi-web",
+      "url": "https://github.com/RiasJ1Dar/downloader/releases/download/v0.1.0/Downloader-0.1.0-web.msi",
+      "size": 45728392,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "Downloader-0.1.0-full.msi",
+      "type": "msi-full",
+      "url": "https://github.com/RiasJ1Dar/downloader/releases/download/v0.1.0/Downloader-0.1.0-full.msi",
+      "size": 100182410,
+      "sha256": "ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb"
+    }
+  ],
+  "pubkey_id": "downloader-release-2026-1"
+}
