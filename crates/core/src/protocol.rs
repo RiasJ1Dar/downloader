@@ -223,6 +223,92 @@ pub struct RunContext {
     ///
     /// Якщо задано, модуль використовує його замість власного внутрішнього лімітера.
     pub limiter: Option<std::sync::Arc<crate::rate::RateLimiter>>,
+    /// Максимальна тривалість завантаження (для live-потоків).
+    pub max_duration: Option<std::time::Duration>,
+    /// Вимога починати від початку live-буфера (перемотування назад / DVR).
+    pub rewind: bool,
+}
+
+/// Розібрати рядок тривалості на `std::time::Duration`.
+///
+/// Підтримує суфікси:
+/// - `s`, `с`, `sec` — секунди;
+/// - `m`, `хв`, `min` — хвилини;
+/// - `h`, `г`, `год`, `hr` — години;
+/// - складені рядки, наприклад `1h30m`, `10m30s`, `1год30хв`;
+/// - число без суфікса — трактується як секунди.
+pub fn parse_duration(raw: &str) -> crate::error::Result<std::time::Duration> {
+    let s = raw.trim();
+    if s.is_empty() {
+        return Err(crate::error::Error::Store("порожній рядок тривалості".to_owned()));
+    }
+
+    if let Ok(secs) = s.parse::<u64>() {
+        if secs == 0 {
+            return Err(crate::error::Error::Store(format!("тривалість має бути більшою за 0: '{s}'")));
+        }
+        return Ok(std::time::Duration::from_secs(secs));
+    }
+
+    let mut total_secs = 0u64;
+    let mut current_num = String::new();
+    let mut current_unit = String::new();
+
+    let flush = |num: &str, unit: &str| -> crate::error::Result<u64> {
+        let val: u64 = num.parse().map_err(|_| {
+            crate::error::Error::Store(format!("некоректне число у тривалості: '{num}'"))
+        })?;
+        let mult = match unit.to_lowercase().as_str() {
+            "s" | "sec" | "secs" | "с" | "сек" => 1u64,
+            "m" | "min" | "mins" | "mіn" | "хв" => 60u64,
+            "h" | "hr" | "hrs" | "г" | "год" => 3600u64,
+            other => {
+                return Err(crate::error::Error::Store(format!(
+                    "невідома одиниця тривалості: '{other}'"
+                )));
+            }
+        };
+        Ok(val.saturating_mul(mult))
+    };
+
+    let mut in_num = true;
+    for ch in s.chars() {
+        if ch.is_whitespace() {
+            continue;
+        }
+        if ch.is_ascii_digit() {
+            if !in_num && !current_unit.is_empty() {
+                total_secs = total_secs.saturating_add(flush(&current_num, &current_unit)?);
+                current_num.clear();
+                current_unit.clear();
+            }
+            in_num = true;
+            current_num.push(ch);
+        } else {
+            if current_num.is_empty() {
+                return Err(crate::error::Error::Store(format!("некоректна тривалість: '{s}'")));
+            }
+            in_num = false;
+            current_unit.push(ch);
+        }
+    }
+
+    if !current_num.is_empty() && !current_unit.is_empty() {
+        total_secs = total_secs.saturating_add(flush(&current_num, &current_unit)?);
+    } else if !current_num.is_empty() {
+        let val: u64 = current_num.parse().map_err(|_| {
+            crate::error::Error::Store(format!("некоректне число у тривалості: '{current_num}'"))
+        })?;
+        total_secs = total_secs.saturating_add(val);
+    } else {
+        return Err(crate::error::Error::Store(format!("некоректна тривалість: '{s}'")));
+    }
+
+    if total_secs == 0 {
+        return Err(crate::error::Error::Store(format!("тривалість має бути більшою за 0: '{s}'")));
+    }
+
+    Ok(std::time::Duration::from_secs(total_secs))
 }
 
 /// Що модуль повідомляє ядру під час роботи.
@@ -618,6 +704,8 @@ mod tests {
                     session: Session::default(),
                     variant: None,
                     limiter: None,
+                    max_duration: None,
+                    rewind: false,
                 },
                 &збирач,
             )
@@ -657,6 +745,8 @@ mod tests {
                     session: Session::default(),
                     variant: None,
                     limiter: None,
+                    max_duration: None,
+                    rewind: false,
                 },
                 &збирач,
             )
@@ -737,5 +827,33 @@ mod tests {
 
         assert_eq!(r.names(), vec!["перший", "другий"]);
         assert_eq!(r.len(), 2);
+    }
+
+    #[test]
+    fn parse_duration_розпізнає_секунди_хвилини_години() {
+        assert_eq!(parse_duration("30s").unwrap(), std::time::Duration::from_secs(30));
+        assert_eq!(parse_duration("10m").unwrap(), std::time::Duration::from_secs(600));
+        assert_eq!(parse_duration("1h").unwrap(), std::time::Duration::from_secs(3600));
+        assert_eq!(parse_duration("1h30m").unwrap(), std::time::Duration::from_secs(5400));
+        assert_eq!(parse_duration("10m30s").unwrap(), std::time::Duration::from_secs(630));
+        assert_eq!(parse_duration("90").unwrap(), std::time::Duration::from_secs(90));
+    }
+
+    #[test]
+    fn parse_duration_розпізнає_українські_суфікси() {
+        assert_eq!(parse_duration("45с").unwrap(), std::time::Duration::from_secs(45));
+        assert_eq!(parse_duration("10хв").unwrap(), std::time::Duration::from_secs(600));
+        assert_eq!(parse_duration("2год").unwrap(), std::time::Duration::from_secs(7200));
+        assert_eq!(parse_duration("1год15хв").unwrap(), std::time::Duration::from_secs(4500));
+    }
+
+    #[test]
+    fn parse_duration_відхиляє_нуль_та_сміття() {
+        assert!(parse_duration("").is_err());
+        assert!(parse_duration("   ").is_err());
+        assert!(parse_duration("0").is_err());
+        assert!(parse_duration("0s").is_err());
+        assert!(parse_duration("abc").is_err());
+        assert!(parse_duration("10xyz").is_err());
     }
 }
