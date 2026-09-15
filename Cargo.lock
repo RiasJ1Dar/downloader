@@ -757,6 +757,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "downloader-ipc",
+ "downloader-winutil",
  "serde",
  "serde_json",
  "tokio",
