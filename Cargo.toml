@@ -43,6 +43,7 @@ sys-locale = "0.3"
 
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
+clap_complete = "4"
 thiserror = "2"
 async-trait = "0.1"
 serde = { version = "1", features = ["derive"] }
