@@ -74,15 +74,15 @@ jobs:
             }
           }
           if (-not $notes) {
-            $notes = @"
-Downloader $tag
-
-Зібрано два MSI-пакети для Windows x64:
-- `Downloader-$ver-web.msi` (веб-інсталятор, завантажує ffmpeg за потреби)
-- `Downloader-$ver-full.msi` (повний інсталятор із вбудованим LGPL ffmpeg)
-
-Контрольні суми SHA-256 наведено у файлі `SHA256SUMS.txt`.
-"@
+            $notes = @(
+              "Downloader $tag",
+              "",
+              "Зібрано два MSI-пакети для Windows x64:",
+              "- Downloader-$ver-web.msi (веб-інсталятор, завантажує ffmpeg за потреби)",
+              "- Downloader-$ver-full.msi (повний інсталятор із вбудованим LGPL ffmpeg)",
+              "",
+              "Контрольні суми SHA-256 наведено у файлі SHA256SUMS.txt."
+            ) -join "`n"
           }
           $notesFile = "target\msi\release-notes.txt"
           [System.IO.File]::WriteAllText($notesFile, $notes, [System.Text.UTF8Encoding]::new($false))
