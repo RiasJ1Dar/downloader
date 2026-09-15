@@ -1211,6 +1211,7 @@ mod tests {
                 cancel: Cancel::new(),
                 session: Session::default(),
                 variant: None,
+                limiter: None,
             },
             &Німий,
         )
@@ -1325,6 +1326,7 @@ mod tests {
                 cancel: Cancel::new(),
                 session: Session::default(),
                 variant: None,
+                limiter: None,
             },
             &Німий,
         )
@@ -1371,6 +1373,7 @@ mod tests {
                 cancel: Cancel::new(),
                 session: Session::default(),
                 variant: None,
+                limiter: None,
             },
             &Німий,
         )
@@ -1401,6 +1404,7 @@ mod tests {
                 cancel: Cancel::new(),
                 session: Session::default(),
                 variant: None,
+                limiter: None,
             },
             &Німий,
         )
@@ -1444,6 +1448,7 @@ mod tests {
                 cancel: Cancel::new(),
                 session: Session::default(),
                 variant: None,
+                limiter: None,
             },
             &Німий,
         )
@@ -1474,6 +1479,7 @@ mod tests {
                 cancel: Cancel::new(),
                 session: Session::default(),
                 variant: None,
+                limiter: None,
             },
             &Німий,
         )
@@ -1516,6 +1522,7 @@ mod tests {
                 cancel: Cancel::new(),
                 session: Session::default(),
                 variant: None,
+                limiter: None,
             },
             &Німий,
         )

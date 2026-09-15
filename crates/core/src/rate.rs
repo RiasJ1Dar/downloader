@@ -96,6 +96,15 @@ impl RateLimiter {
         self.bucket.lock().map(|b| b.is_some()).unwrap_or(false)
     }
 
+    /// Поточний ліміт швидкості у байтах за секунду (0 — необмежено).
+    #[must_use]
+    pub fn limit(&self) -> u64 {
+        let Ok(guard) = self.bucket.lock() else {
+            return 0;
+        };
+        guard.as_ref().map(|b| b.capacity as u64).unwrap_or(0)
+    }
+
     /// Змінити ліміт швидкості на льоту без перезапуску завантаження.
     ///
     /// Нуль вимикає обмеження.

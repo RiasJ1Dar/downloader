@@ -121,6 +121,10 @@ enum Command {
         /// Заголовок Referer.
         #[arg(long)]
         referer: Option<String>,
+
+        /// Черга завантаження (типово "default").
+        #[arg(short = 'q', long)]
+        queue: Option<String>,
     },
 
     /// Показати завдання ядра.
@@ -221,6 +225,111 @@ enum Command {
 
     /// Оновити зовнішній yt-dlp (`yt-dlp -U`).
     YtdlpUpdate,
+
+    /// Перемістити завдання в іншу чергу.
+    Move {
+        /// Ідентифікатор завдання зі `dl list`.
+        id: i64,
+
+        /// Назва черги призначення.
+        #[arg(short = 'q', long)]
+        queue: String,
+    },
+
+    /// Керування іменованими чергами завантажень.
+    Queue {
+        #[command(subcommand)]
+        sub: Option<QueueCommand>,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum QueueCommand {
+    /// Показати список черг.
+    List,
+
+    /// Створити нову чергу.
+    Add {
+        /// Назва черги.
+        name: String,
+
+        /// Одночасних завантажень у черзі.
+        #[arg(long)]
+        max: Option<u32>,
+
+        /// Ліміт швидкості черги у КБ/с. 0 — без обмежень.
+        #[arg(long)]
+        rate_kb: Option<u64>,
+
+        /// Початок вікна старту завантажень (ГГ:ХХ).
+        #[arg(long)]
+        from: Option<String>,
+
+        /// Кінець вікна старту завантажень (ГГ:ХХ).
+        #[arg(long)]
+        to: Option<String>,
+
+        /// Післядія черги: `none`, `sleep` або `shutdown`.
+        #[arg(long)]
+        after: Option<String>,
+    },
+
+    /// Змінити налаштування черги.
+    Set {
+        /// Назва черги.
+        name: String,
+
+        /// Одночасних завантажень у черзі.
+        #[arg(long)]
+        max: Option<u32>,
+
+        /// Ліміт швидкості черги у КБ/с. 0 — без обмежень.
+        #[arg(long)]
+        rate_kb: Option<u64>,
+
+        /// Початок вікна старту завантажень (ГГ:ХХ).
+        #[arg(long)]
+        from: Option<String>,
+
+        /// Кінець вікна старту завантажень (ГГ:ХХ).
+        #[arg(long)]
+        to: Option<String>,
+
+        /// Післядія черги: `none`, `sleep` або `shutdown`.
+        #[arg(long)]
+        after: Option<String>,
+
+        /// Прибрати розклад черги.
+        #[arg(long)]
+        clear_schedule: bool,
+    },
+
+    /// Зупинити всі завантаження черги.
+    Pause {
+        /// Назва черги.
+        name: String,
+    },
+
+    /// Продовжити завантаження черги.
+    Resume {
+        /// Назва черги.
+        name: String,
+    },
+
+    /// Перейменувати чергу.
+    Rename {
+        /// Стара назва черги.
+        old: String,
+
+        /// Нова назва черги.
+        new: String,
+    },
+
+    /// Видалити чергу (завдання перейдуть у чергу "default").
+    Rm {
+        /// Назва черги.
+        name: String,
+    },
 }
 
 #[tokio::main]
@@ -247,6 +356,7 @@ async fn main() -> Result<()> {
             parts,
             cookie,
             referer,
+            queue,
         } => {
             let urls = зібрати_адреси(url, list, clipboard)?;
             let mut core = client::Client::connect().await?;
@@ -271,6 +381,7 @@ async fn main() -> Result<()> {
                         cookies: session.cookies.clone(),
                         referer: session.referer.clone(),
                         variant: None,
+                        queue: queue.clone(),
                     })
                     .await?;
                 match resp {
@@ -303,10 +414,16 @@ async fn main() -> Result<()> {
                             || format_size(t.done),
                             |p| format!("{:.0}% ({})", p * 100.0, format_size(t.done)),
                         );
+                        let q_display = if t.queue == "default" {
+                            "default (типова)".to_owned()
+                        } else {
+                            t.queue
+                        };
                         println!(
-                            "{:>4}  {:<10} {:>18}  {:>10}/с  {}",
+                            "{:>4}  {:<10} {:<16} {:>18}  {:>10}/с  {}",
                             t.id,
                             t.status,
+                            q_display,
                             прогрес,
                             format_size(t.speed),
                             t.name
@@ -569,6 +686,152 @@ async fn main() -> Result<()> {
                 println!("{}", t("ytdlp-updated"));
             } else {
                 println!("{trimmed}");
+            }
+        }
+
+        Command::Move { id, queue } => {
+            let mut core = client::Client::connect().await?;
+            core.call_ok(&Request::MoveToQueue {
+                id,
+                queue: queue.clone(),
+            })
+            .await?;
+            println!(
+                "{}",
+                t_pairs(
+                    "task-moved",
+                    &[("id", id.to_string()), ("queue", queue)]
+                )
+            );
+        }
+
+        Command::Queue { sub } => {
+            let mut core = client::Client::connect().await?;
+            match sub.unwrap_or(QueueCommand::List) {
+                QueueCommand::List => {
+                    match core.call(&Request::Queues).await? {
+                        Response::Queues { queues } if queues.is_empty() => {
+                            println!("{}", t("no-queues"));
+                        }
+                        Response::Queues { queues } => {
+                            println!(
+                                "{:>4}  {:<16} {:>6}  {:>14}  {:<14} {:<10} {:>6} {:>8}",
+                                "ID",
+                                "НАЗВА",
+                                "СЛОТИ",
+                                "ШВИДКІСТЬ",
+                                "РОЗКЛАД",
+                                "ПІСЛЯДІЯ",
+                                "РАЗОМ",
+                                "АКТИВНІ"
+                            );
+                            for q in queues {
+                                let name_display = if q.paused {
+                                    format!("{} [пауза]", q.name)
+                                } else {
+                                    q.name
+                                };
+                                let rate_display = if q.rate_limit == 0 {
+                                    t("set-unlimited")
+                                } else {
+                                    format!("{} {}/с", q.rate_limit / 1024, t("kb"))
+                                };
+                                let sched_display = match (q.schedule_from, q.schedule_to) {
+                                    (Some(a), Some(b)) => format!("{a}–{b}"),
+                                    _ => t("set-always"),
+                                };
+                                println!(
+                                    "{:>4}  {:<16} {:>6}  {:>14}  {:<14} {:<10} {:>6} {:>8}",
+                                    q.id,
+                                    name_display,
+                                    q.max_concurrent,
+                                    rate_display,
+                                    sched_display,
+                                    післядія_текст(&q.post_action),
+                                    q.total_tasks,
+                                    q.running_tasks,
+                                );
+                            }
+                        }
+                        Response::Error { message, .. } => anyhow::bail!(message),
+                        other => anyhow::bail!("несподівана відповідь ядра: {other:?}"),
+                    }
+                }
+                QueueCommand::Add {
+                    name,
+                    max,
+                    rate_kb,
+                    from,
+                    to,
+                    after,
+                } => {
+                    core.call_ok(&Request::QueueCreate {
+                        name: name.clone(),
+                        max_concurrent: max,
+                        rate_limit: rate_kb.map(|kb| kb.saturating_mul(1024)),
+                        schedule_from: from,
+                        schedule_to: to,
+                        post_action: after,
+                    })
+                    .await?;
+                    println!("{}", t_pairs("queue-created", &[("name", name)]));
+                }
+                QueueCommand::Set {
+                    name,
+                    max,
+                    rate_kb,
+                    from,
+                    to,
+                    after,
+                    clear_schedule,
+                } => {
+                    let schedule_from = if clear_schedule {
+                        Some(String::new())
+                    } else {
+                        from
+                    };
+                    let schedule_to = if clear_schedule {
+                        Some(String::new())
+                    } else {
+                        to
+                    };
+                    core.call_ok(&Request::QueueConfigure {
+                        name: name.clone(),
+                        max_concurrent: max,
+                        rate_limit: rate_kb.map(|kb| kb.saturating_mul(1024)),
+                        schedule_from,
+                        schedule_to,
+                        post_action: after,
+                    })
+                    .await?;
+                    println!("{}", t_pairs("queue-configured", &[("name", name)]));
+                }
+                QueueCommand::Pause { name } => {
+                    core.call_ok(&Request::QueuePause { name: name.clone() })
+                        .await?;
+                    println!("{}", t_pairs("queue-paused", &[("name", name)]));
+                }
+                QueueCommand::Resume { name } => {
+                    core.call_ok(&Request::QueueResume { name: name.clone() })
+                        .await?;
+                    println!("{}", t_pairs("queue-resumed", &[("name", name)]));
+                }
+                QueueCommand::Rename { old, new } => {
+                    core.call_ok(&Request::QueueRename {
+                        old_name: old.clone(),
+                        new_name: new.clone(),
+                    })
+                    .await?;
+                    println!(
+                        "{}",
+                        t_pairs("queue-renamed", &[("old", old), ("new", new)])
+                    );
+                }
+                QueueCommand::Rm { name } => {
+                    core.call_ok(&Request::QueueDelete { name: name.clone() })
+                        .await?;
+                    println!("{}", t_pairs("queue-removed", &[("name", name)]));
+                }
             }
         }
 
@@ -856,6 +1119,7 @@ async fn качати_модулем(
         cancel: Cancel::new(),
         session,
         variant: варіант,
+        limiter: None,
     };
     if p.run(ctx, &НімийПрогрес).await?.is_some() {
         println!("{}", t("stopped-early"));
@@ -1289,6 +1553,45 @@ mod tests {
                 ..
             } => {}
             other => panic!("не ytdlp-update: {other:?}"),
+        }
+
+        match Cli::try_parse_from(["dl", "add", "http://ex.com/a.bin", "-q", "nightly"]).expect("add queue") {
+            Cli {
+                command: Command::Add { queue, .. },
+                ..
+            } => assert_eq!(queue.as_deref(), Some("nightly")),
+            other => panic!("не add -q: {other:?}"),
+        }
+
+        match Cli::try_parse_from(["dl", "move", "42", "-q", "fast"]).expect("move") {
+            Cli {
+                command: Command::Move { id, queue },
+                ..
+            } => {
+                assert_eq!(id, 42);
+                assert_eq!(queue, "fast");
+            }
+            other => panic!("не move: {other:?}"),
+        }
+
+        match Cli::try_parse_from(["dl", "queue", "add", "fast", "--max", "3", "--rate-kb", "1024"]).expect("queue add") {
+            Cli {
+                command: Command::Queue { sub: Some(QueueCommand::Add { name, max, rate_kb, .. }) },
+                ..
+            } => {
+                assert_eq!(name, "fast");
+                assert_eq!(max, Some(3));
+                assert_eq!(rate_kb, Some(1024));
+            }
+            other => panic!("не queue add: {other:?}"),
+        }
+
+        match Cli::try_parse_from(["dl", "queue", "pause", "fast"]).expect("queue pause") {
+            Cli {
+                command: Command::Queue { sub: Some(QueueCommand::Pause { name }) },
+                ..
+            } => assert_eq!(name, "fast"),
+            other => panic!("не queue pause: {other:?}"),
         }
     }
 

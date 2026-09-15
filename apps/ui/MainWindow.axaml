@@ -16,9 +16,10 @@
     <Window.Styles>
         <!-- Рядок списку сам малює свої відступи: типовий ListBoxItem
              додає власні, і разом виходить подвійна рамка. -->
-        <Style Selector="ListBoxItem">
+        <Style Selector="ListBoxItem" x:DataType="vm:TaskRow">
             <Setter Property="Padding" Value="10,8"/>
             <Setter Property="MinHeight" Value="0"/>
+            <Setter Property="IsVisible" Value="{Binding IsVisibleInFilter}"/>
         </Style>
 
         <!-- Кнопки в рядку: іконка без рамки, доки на неї не наведено. -->
@@ -43,10 +44,10 @@
         </Style>
     </Window.Styles>
 
-    <Grid RowDefinitions="Auto,Auto,*,Auto,Auto" Margin="14">
+    <Grid RowDefinitions="Auto,Auto,Auto,Auto,*,Auto,Auto" Margin="14">
 
         <!-- ── Додавання ─────────────────────────────────────────────── -->
-        <Grid Grid.Row="0" ColumnDefinitions="*,Auto" Margin="0,0,0,12">
+        <Grid Grid.Row="0" ColumnDefinitions="*,Auto,Auto" Margin="0,0,0,12">
             <TextBox Grid.Column="0"
                      Text="{Binding NewUrl}"
                      PlaceholderText="{i18n:T ui-paste-url}"
@@ -56,7 +57,14 @@
                 </TextBox.KeyBindings>
             </TextBox>
 
-            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" Margin="8,0,0,0">
+            <ComboBox Grid.Column="1"
+                      Margin="8,0,0,0"
+                      ItemsSource="{Binding QueueNames}"
+                      SelectedItem="{Binding SelectedAddQueue}"
+                      ToolTip.Tip="{i18n:T ui-queue}"
+                      IsEnabled="{Binding Connected}"/>
+
+            <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="8" Margin="8,0,0,0">
                 <Button Padding="14,0"
                         Content="{i18n:T ui-clipboard}"
                         Command="{Binding PasteAddCommand}"
@@ -128,7 +136,75 @@
             </StackPanel>
         </Border>
 
+        <!-- ── Створення нової черги ────────────────────────────────── -->
         <Border Grid.Row="2"
+                Margin="0,0,0,12"
+                Padding="14,12"
+                CornerRadius="6"
+                BorderThickness="1"
+                BorderBrush="{DynamicResource SystemControlForegroundBaseLowBrush}"
+                Background="{DynamicResource SystemControlBackgroundListLowBrush}"
+                IsVisible="{Binding NewQueueOpen}">
+            <StackPanel Spacing="8">
+                <TextBlock Text="{i18n:T ui-queue-create-title}" FontWeight="SemiBold"/>
+                <Grid ColumnDefinitions="Auto,*,Auto,Auto,Auto,Auto" RowDefinitions="Auto,Auto">
+                    <TextBlock Grid.Row="0" Grid.Column="0" Classes="label" Text="{i18n:T ui-queue-name}" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                    <TextBox Grid.Row="0" Grid.Column="1" Text="{Binding NewQueueName}" Margin="0,0,12,0"/>
+                    <TextBlock Grid.Row="0" Grid.Column="2" Classes="label" Text="{i18n:T ui-queue-slots}" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                    <TextBox Grid.Row="0" Grid.Column="3" Width="50" Text="{Binding NewQueueSlotsText}" Margin="0,0,12,0"/>
+                    <TextBlock Grid.Row="0" Grid.Column="4" Classes="label" Text="{i18n:T ui-queue-speed}" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                    <TextBox Grid.Row="0" Grid.Column="5" Width="70" Text="{Binding NewQueueRateText}"/>
+
+                    <StackPanel Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="4" Orientation="Horizontal" Spacing="8" Margin="0,8,0,0">
+                        <TextBlock Classes="label" Text="{i18n:T ui-schedule}" VerticalAlignment="Center"/>
+                        <TextBox Width="55" PlaceholderText="22:00" Text="{Binding NewQueueScheduleFromText}"/>
+                        <TextBlock Classes="label" Text="{i18n:T ui-dash}" VerticalAlignment="Center"/>
+                        <TextBox Width="55" PlaceholderText="07:00" Text="{Binding NewQueueScheduleToText}"/>
+                    </StackPanel>
+                    <StackPanel Grid.Row="1" Grid.Column="4" Grid.ColumnSpan="2" Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right" Margin="0,8,0,0">
+                        <Button Padding="14,4" Content="{i18n:T ui-queue-cancel}" Command="{Binding CancelNewQueueCommand}"/>
+                        <Button Padding="14,4" Content="{i18n:T ui-queue-save}" Command="{Binding CreateQueueCommand}"/>
+                    </StackPanel>
+                </Grid>
+            </StackPanel>
+        </Border>
+
+        <!-- ── Панель черг: фільтр та керування ──────────────────────── -->
+        <Grid Grid.Row="3" ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,*,Auto" Margin="0,0,0,8">
+            <TextBlock Grid.Column="0" Classes="label" Text="{i18n:T ui-queue}" VerticalAlignment="Center" Margin="0,0,8,0"/>
+            <ComboBox Grid.Column="1"
+                      MinWidth="140"
+                      ItemsSource="{Binding QueueFilterOptions}"
+                      SelectedItem="{Binding SelectedFilter}"/>
+            <Button Grid.Column="2"
+                    Classes="icon"
+                    Margin="8,0,0,0"
+                    Content="⏸"
+                    ToolTip.Tip="{i18n:T ui-queue-pause}"
+                    Command="{Binding PauseCurrentQueueCommand}"
+                    IsVisible="{Binding CanManageCurrentQueue}"/>
+            <Button Grid.Column="3"
+                    Classes="icon"
+                    Margin="4,0,0,0"
+                    Content="▶"
+                    ToolTip.Tip="{i18n:T ui-queue-resume}"
+                    Command="{Binding ResumeCurrentQueueCommand}"
+                    IsVisible="{Binding CanManageCurrentQueue}"/>
+            <Button Grid.Column="4"
+                    Classes="icon"
+                    Margin="4,0,0,0"
+                    Content="✕"
+                    ToolTip.Tip="{i18n:T ui-queue-delete}"
+                    Command="{Binding DeleteCurrentQueueCommand}"
+                    IsVisible="{Binding CanDeleteCurrentQueue}"/>
+            <Button Grid.Column="6"
+                    Padding="12,4"
+                    Content="{i18n:T ui-queue-add}"
+                    Command="{Binding ShowNewQueueCommand}"
+                    IsEnabled="{Binding Connected}"/>
+        </Grid>
+
+        <Border Grid.Row="4"
                 BorderBrush="{DynamicResource SystemControlForegroundBaseLowBrush}"
                 BorderThickness="1"
                 CornerRadius="6"
@@ -165,7 +241,13 @@
                                               Total="{Binding Total}"
                                               Fraction="{Binding Fraction}"/>
 
-                                <StackPanel Orientation="Horizontal" Spacing="14">
+                                <StackPanel Orientation="Horizontal" Spacing="10">
+                                    <Border Background="{DynamicResource SystemControlBackgroundBaseLowBrush}"
+                                            CornerRadius="3"
+                                            Padding="6,1"
+                                            VerticalAlignment="Center">
+                                        <TextBlock Classes="label" Text="{Binding Queue}" FontWeight="SemiBold"/>
+                                    </Border>
                                     <TextBlock Classes="dim" Text="{Binding Status}"/>
                                     <TextBlock Classes="dim" Text="{Binding SizeText}"/>
                                     <TextBlock Classes="dim" Text="{Binding SpeedText}"/>
@@ -223,7 +305,7 @@
             «2,4 МБ/с» не відрізняє рівне качання від пилки, що падає до
             нуля щопівсекунди, — а це різні причини.
         -->
-        <Border Grid.Row="3"
+        <Border Grid.Row="5"
                 Margin="0,12,0,0"
                 Padding="14,12"
                 CornerRadius="6"
@@ -253,9 +335,28 @@
                                   Fraction="{Binding Fraction}"/>
 
                     <StackPanel Orientation="Horizontal" Spacing="16">
+                        <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                            <TextBlock Classes="label" Text="{i18n:T ui-queue}" VerticalAlignment="Center"/>
+                            <Border Background="{DynamicResource SystemControlBackgroundBaseLowBrush}"
+                                    CornerRadius="3"
+                                    Padding="6,1"
+                                    VerticalAlignment="Center">
+                                <TextBlock Classes="label" Text="{Binding Queue}" FontWeight="SemiBold"/>
+                            </Border>
+                        </StackPanel>
                         <TextBlock Classes="dim" Text="{Binding SizeText}"/>
                         <TextBlock Classes="dim" Text="{Binding SegmentsText}"/>
                         <TextBlock Classes="dim" Text="{Binding EtaText}"/>
+                        <StackPanel Orientation="Horizontal" Spacing="4" VerticalAlignment="Center" Margin="12,0,0,0">
+                            <TextBlock Classes="label" Text="{i18n:T ui-queue-move}" VerticalAlignment="Center"/>
+                            <ComboBox Width="110"
+                                      ItemsSource="{Binding $parent[Window].((vm:MainViewModel)DataContext).QueueNames}"
+                                      SelectedItem="{Binding $parent[Window].((vm:MainViewModel)DataContext).TargetMoveQueue}"/>
+                            <Button Padding="8,2"
+                                    Content="→"
+                                    ToolTip.Tip="{i18n:T ui-queue-move}"
+                                    Command="{Binding $parent[Window].((vm:MainViewModel)DataContext).MoveSelectedTaskCommand}"/>
+                        </StackPanel>
                     </StackPanel>
                 </StackPanel>
 
@@ -288,7 +389,7 @@
         <!-- Рядок стану: кружечок зв'язку плюс останнє повідомлення. Без
              кружечка «з'єднано з ядром» губиться серед інших текстів, а це
              найважливіше, що тут є: без ядра не працює нічого. -->
-        <Grid Grid.Row="4" ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto" Margin="2,10,0,0">
+        <Grid Grid.Row="6" ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto" Margin="2,10,0,0">
             <StackPanel Orientation="Horizontal" Spacing="7">
                 <Ellipse Width="8" Height="8"
                          VerticalAlignment="Center"

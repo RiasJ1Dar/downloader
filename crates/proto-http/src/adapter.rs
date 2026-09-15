@@ -148,10 +148,17 @@ impl Protocol for HttpProtocol {
         type Поступ = (u64, usize, Vec<downloader_core::protocol::PartProgress>);
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Поступ>();
 
+        let effective_limiter = ctx.limiter.clone().unwrap_or_else(|| self.limiter.clone());
+        let effective_rate = if ctx.limiter.is_some() {
+            effective_limiter.limit()
+        } else {
+            self.rate_limit.lock().map(|g| *g).unwrap_or(0)
+        };
+
         let опції = Options {
             parts: self.parts,
-            rate_limit: self.rate_limit.lock().map(|g| *g).unwrap_or(0),
-            limiter: Some(self.limiter.clone()),
+            rate_limit: effective_rate,
+            limiter: Some(effective_limiter),
             cancel: Some(ctx.cancel.clone()),
             on_progress: Some(Arc::new(move |done, segments, parts| {
                 // Помилка надсилання означає лише, що слухач пішов, —
@@ -314,6 +321,7 @@ mod tests {
                 cancel: Cancel::new(),
                 session,
                 variant: None,
+                limiter: None,
             },
             &Німий,
         )
