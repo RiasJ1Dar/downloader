@@ -140,9 +140,13 @@ async fn dispatch(req: Request, engine: &Arc<Engine>) -> Response {
             cookies,
             referer,
             variant,
+            queue,
         } => {
             let session = downloader_core::protocol::Session::from_parts(cookies, referer);
-            match engine.add(&url, dest.map(Into::into), parts, session, variant).await {
+            match engine
+                .add(&url, dest.map(Into::into), parts, session, variant, queue)
+                .await
+            {
                 Ok(id) => Response::Added { id },
                 Err(e) => Response::Error {
                     code: ErrorCode::Internal,
@@ -214,6 +218,104 @@ async fn dispatch(req: Request, engine: &Arc<Engine>) -> Response {
                 message: e.to_string(),
             },
         },
+
+        Request::Queues => Response::Queues {
+            queues: engine.queues(),
+        },
+
+        Request::QueueCreate {
+            name,
+            max_concurrent,
+            rate_limit,
+            schedule_from,
+            schedule_to,
+            post_action,
+        } => {
+            let patch = downloader_core::store::QueuePatch {
+                max_concurrent,
+                rate_limit,
+                paused: None,
+                schedule_from,
+                schedule_to,
+                post_action,
+            };
+            match engine.create_queue(name, patch) {
+                Ok(()) => Response::Ok,
+                Err(e) => Response::Error {
+                    code: ErrorCode::InvalidState,
+                    message: e.to_string(),
+                },
+            }
+        }
+
+        Request::QueueConfigure {
+            name,
+            max_concurrent,
+            rate_limit,
+            schedule_from,
+            schedule_to,
+            post_action,
+        } => {
+            let patch = downloader_core::store::QueuePatch {
+                max_concurrent,
+                rate_limit,
+                paused: None,
+                schedule_from,
+                schedule_to,
+                post_action,
+            };
+            match engine.configure_queue(&name, patch) {
+                Ok(()) => Response::Ok,
+                Err(e) => Response::Error {
+                    code: ErrorCode::InvalidState,
+                    message: e.to_string(),
+                },
+            }
+        }
+
+        Request::QueuePause { name } => match engine.pause_queue(&name) {
+            Ok(()) => Response::Ok,
+            Err(e) => Response::Error {
+                code: ErrorCode::InvalidState,
+                message: e.to_string(),
+            },
+        },
+
+        Request::QueueResume { name } => match engine.resume_queue(&name) {
+            Ok(()) => Response::Ok,
+            Err(e) => Response::Error {
+                code: ErrorCode::InvalidState,
+                message: e.to_string(),
+            },
+        },
+
+        Request::QueueRename { old_name, new_name } => {
+            match engine.rename_queue(&old_name, &new_name) {
+                Ok(()) => Response::Ok,
+                Err(e) => Response::Error {
+                    code: ErrorCode::InvalidState,
+                    message: e.to_string(),
+                },
+            }
+        }
+
+        Request::QueueDelete { name } => match engine.delete_queue(&name) {
+            Ok(()) => Response::Ok,
+            Err(e) => Response::Error {
+                code: ErrorCode::InvalidState,
+                message: e.to_string(),
+            },
+        },
+
+        Request::MoveToQueue { id, queue } => {
+            match engine.move_task_to_queue(id, &queue) {
+                Ok(()) => Response::Ok,
+                Err(e) => Response::Error {
+                    code: ErrorCode::InvalidState,
+                    message: e.to_string(),
+                },
+            }
+        }
 
         Request::Hello { .. } => Response::Error {
             code: ErrorCode::InvalidState,

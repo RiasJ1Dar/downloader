@@ -48,9 +48,62 @@ public sealed record AddRequest(
     int? Parts = null,
     string? Cookies = null,
     string? Referer = null,
-    string? Variant = null) : Request
+    string? Variant = null,
+    string? Queue = null) : Request
 {
     public override string Kind => "add";
+}
+
+public sealed record QueuesRequest : Request
+{
+    public override string Kind => "queues";
+}
+
+public sealed record QueueCreateRequest(
+    string Name,
+    uint? MaxConcurrent = null,
+    ulong? RateLimit = null,
+    string? ScheduleFrom = null,
+    string? ScheduleTo = null,
+    string? PostAction = null) : Request
+{
+    public override string Kind => "queue_create";
+}
+
+public sealed record QueueConfigureRequest(
+    string Name,
+    uint? MaxConcurrent = null,
+    ulong? RateLimit = null,
+    string? ScheduleFrom = null,
+    string? ScheduleTo = null,
+    string? PostAction = null) : Request
+{
+    public override string Kind => "queue_configure";
+}
+
+public sealed record QueuePauseRequest(string Name) : Request
+{
+    public override string Kind => "queue_pause";
+}
+
+public sealed record QueueResumeRequest(string Name) : Request
+{
+    public override string Kind => "queue_resume";
+}
+
+public sealed record QueueRenameRequest(string OldName, string NewName) : Request
+{
+    public override string Kind => "queue_rename";
+}
+
+public sealed record QueueDeleteRequest(string Name) : Request
+{
+    public override string Kind => "queue_delete";
+}
+
+public sealed record MoveToQueueRequest(long Id, string Queue) : Request
+{
+    public override string Kind => "move_to_queue";
 }
 
 public sealed record ListRequest : Request
@@ -151,6 +204,9 @@ public sealed class Response
 
     [JsonPropertyName("tasks")]
     public List<TaskView>? Tasks { get; set; }
+
+    [JsonPropertyName("queues")]
+    public List<QueueView>? Queues { get; set; }
 
     [JsonPropertyName("parts")]
     public List<PartView>? Parts { get; set; }
@@ -260,6 +316,9 @@ public sealed class TaskView
     [JsonPropertyName("dest")]
     public string? Dest { get; set; }
 
+    [JsonPropertyName("queue")]
+    public string Queue { get; set; } = "default";
+
     /// <summary>
     /// Частка виконаного від 0 до 1, або <c>null</c>, коли розмір невідомий.
     /// </summary>
@@ -269,6 +328,42 @@ public sealed class TaskView
     /// </remarks>
     public double? Progress =>
         Total is > 0 ? System.Math.Min(1.0, (double)Done / Total.Value) : null;
+}
+
+/// <summary>
+/// Іменована черга з лімітами, розкладом та статистикою завдань.
+/// </summary>
+public sealed class QueueView
+{
+    [JsonPropertyName("id")]
+    public long Id { get; set; }
+
+    [JsonPropertyName("name")]
+    public string Name { get; set; } = "";
+
+    [JsonPropertyName("max_concurrent")]
+    public uint MaxConcurrent { get; set; }
+
+    [JsonPropertyName("rate_limit")]
+    public ulong RateLimit { get; set; }
+
+    [JsonPropertyName("schedule_from")]
+    public string? ScheduleFrom { get; set; }
+
+    [JsonPropertyName("schedule_to")]
+    public string? ScheduleTo { get; set; }
+
+    [JsonPropertyName("post_action")]
+    public string PostAction { get; set; } = "none";
+
+    [JsonPropertyName("paused")]
+    public bool Paused { get; set; }
+
+    [JsonPropertyName("total_tasks")]
+    public long TotalTasks { get; set; }
+
+    [JsonPropertyName("running_tasks")]
+    public long RunningTasks { get; set; }
 }
 
 /// <summary>Одна частина завантаження — звідки, доки й скільки вже є.</summary>

@@ -74,6 +74,8 @@ struct Live {
     /// Живе лише в пам'яті й лише для активних завдань: після завершення
     /// вона нікому не потрібна, а в базі роздувала б рядок.
     parts: Vec<downloader_core::protocol::PartProgress>,
+    /// Іменована черга.
+    queue: String,
 }
 
 impl Live {
@@ -90,6 +92,7 @@ impl Live {
             segments: self.segments,
             error: self.error.clone(),
             dest: self.targets.first().map(|p| p.display().to_string()),
+            queue: self.queue.clone(),
         }
     }
 
@@ -165,6 +168,8 @@ pub struct Engine {
     вікно_було: std::sync::atomic::AtomicBool,
     /// Поточний активний ліміт швидкості для динамічного оновлення модулів на льоту.
     поточний_ліміт: std::sync::atomic::AtomicU64,
+    /// Обмежувачі швидкості для окремих іменованих черг.
+    queue_limiters: Mutex<HashMap<String, Arc<downloader_core::rate::RateLimiter>>>,
 }
 
 impl Engine {
@@ -220,6 +225,7 @@ impl Engine {
             after: Arc::new(AfterQueue::default()),
             вікно_було: std::sync::atomic::AtomicBool::new(вікно),
             поточний_ліміт: std::sync::atomic::AtomicU64::new(початковий_ліміт),
+            queue_limiters: Mutex::new(HashMap::new()),
         });
 
         engine.відновити_з_бази()?;
@@ -284,6 +290,7 @@ impl Engine {
                 protocol: t.protocol,
                 targets,
                 parts: Vec::new(),
+                queue: t.queue,
             });
         }
         drop(store);
@@ -431,6 +438,7 @@ impl Engine {
         _parts: Option<usize>,
         session: Session,
         variant: Option<String>,
+        queue: Option<String>,
     ) -> anyhow::Result<i64> {
         // Хто це качатиме, вирішує реєстр, а не ядро. Саме тут і живе межа.
         let Some(protocol) = self.registry.find(url) else {
@@ -445,6 +453,18 @@ impl Engine {
         if let Some(id) = знайти_живе(&self.live, url) {
             anyhow::bail!("це посилання вже качається як завдання {id}");
         }
+
+        let (actual_queue, q_row) = {
+            let store = self
+                .store
+                .lock()
+                .map_err(|_| anyhow::anyhow!("сховище отруєно"))?;
+            let q_name = queue.unwrap_or_else(|| downloader_core::store::DEFAULT_QUEUE.to_owned());
+            let row = store
+                .queue(&q_name)?
+                .ok_or_else(|| anyhow::anyhow!("черги '{q_name}' не існує"))?;
+            (q_name, row)
+        };
 
         // Сесія до проби: інакше `/auth` і сесійне HLS знову дадуть 403.
         protocol.set_session(session.clone());
@@ -516,6 +536,7 @@ impl Engine {
                 title: None,
                 category_id,
                 variant: variant.clone(),
+                queue: Some(actual_queue.clone()),
                 files: planned
                     .iter()
                     .map(|(path, size)| NewFile {
@@ -538,12 +559,18 @@ impl Engine {
             let Ok(live) = self.live.lock() else {
                 anyhow::bail!("список завдань отруєно");
             };
+            let running_total = live
+                .values()
+                .filter(|t| t.status == Status::Running)
+                .count();
+            let running_in_q = live
+                .values()
+                .filter(|t| t.queue == actual_queue && t.status == Status::Running)
+                .count();
             self.вікно_відкрите()
-                && live
-                    .values()
-                    .filter(|t| t.status == Status::Running)
-                    .count()
-                    < self.стеля()
+                && q_row.downloads_allowed(хвилини_зараз())
+                && running_total < self.стеля()
+                && running_in_q < q_row.max_concurrent as usize
         };
 
         if let Ok(mut live) = self.live.lock() {
@@ -569,6 +596,7 @@ impl Engine {
                     targets: targets.clone(),
                     variant: variant.clone(),
                     parts: Vec::new(),
+                    queue: actual_queue.clone(),
                 },
             );
         }
@@ -582,6 +610,7 @@ impl Engine {
                 targets,
                 session,
                 variant,
+                actual_queue,
             );
         } else {
             self.set_status(id, Status::Queued, None);
@@ -596,6 +625,7 @@ impl Engine {
     }
 
     /// Запустити качання окремою задачею.
+    #[allow(clippy::too_many_arguments)]
     fn spawn_download(
         self: Arc<Self>,
         id: i64,
@@ -604,6 +634,7 @@ impl Engine {
         targets: Vec<PathBuf>,
         session: Session,
         variant: Option<String>,
+        queue_name: String,
     ) {
         tokio::spawn(async move {
             let Some(module) = self.registry.by_name(&protocol) else {
@@ -622,13 +653,32 @@ impl Engine {
                 c.insert(id, cancel.clone());
             }
 
-            let limit = self
+            let queue_rate_limit = {
+                let store = self.store.lock().ok();
+                store.and_then(|s| s.queue(&queue_name).ok().flatten()).map(|q| q.rate_limit).unwrap_or(0)
+            };
+
+            let limiter = if queue_rate_limit > 0 {
+                let mut limiters = self.queue_limiters.lock().ok();
+                if let Some(ref mut map) = limiters {
+                    let entry = map.entry(queue_name.clone()).or_insert_with(|| {
+                        Arc::new(downloader_core::rate::RateLimiter::new(queue_rate_limit))
+                    });
+                    Some(entry.clone())
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+            let global_limit = self
                 .налаштування
                 .lock()
                 .map(|s| s.effective_rate(хвилини_зараз()))
                 .unwrap_or(0);
-            if limit > 0 {
-                match module.set_rate_limit(limit) {
+            if global_limit > 0 {
+                match module.set_rate_limit(global_limit) {
                     RateLimitSupport::Applied => {}
                     RateLimitSupport::Unsupported => {
                         tracing::debug!(id, "модуль не вміє ліміт швидкості");
@@ -645,6 +695,7 @@ impl Engine {
                 cancel,
                 session,
                 variant,
+                limiter,
             };
 
             match module.run(ctx.clone(), &sink).await {
@@ -700,42 +751,90 @@ impl Engine {
         });
     }
 
-    /// Якщо є вільний слот — зняти найстаріше queued і запустити.
+    /// Якщо є вільний слот — знайти черги, які дозволені й не вичерпали ліміт,
+    /// обрати найстаріше завдання й запустити.
     fn спробувати_наступне(self: Arc<Self>) {
         if !self.вікно_відкрите() {
             return;
         }
-        let job = {
-            let Ok(mut live) = self.live.lock() else {
+
+        let now_min = хвилини_зараз();
+
+        let queues = {
+            let Ok(store) = self.store.lock() else {
                 return;
             };
-            let running = live
-                .values()
-                .filter(|t| t.status == Status::Running)
-                .count();
-            if running >= self.стеля() {
-                return;
-            }
-            let Some(next_id) = id_наступного_в_черзі(&live) else {
-                return;
-            };
-            let Some(task) = live.get_mut(&next_id) else {
-                return;
-            };
-            task.status = Status::Running;
-            task.error = None;
-            (
-                task.id,
-                task.protocol.clone(),
-                task.url.clone(),
-                task.targets.clone(),
-                task.session.clone(),
-                task.variant.clone(),
-            )
+            store.queues().unwrap_or_default()
         };
-        let (id, protocol, url, targets, session, variant) = job;
-        self.set_status(id, Status::Running, None);
-        self.spawn_download(id, protocol, url, targets, session, variant);
+
+        loop {
+            let job = {
+                let Ok(mut live) = self.live.lock() else {
+                    return;
+                };
+
+                // Глобальна стеля
+                let running_total = live
+                    .values()
+                    .filter(|t| t.status == Status::Running)
+                    .count();
+                if running_total >= self.стеля() {
+                    return;
+                }
+
+                // Список черг, у яких зараз дозволено брати нові завдання
+                let mut eligible_queues = std::collections::HashSet::new();
+                for q in &queues {
+                    if !q.downloads_allowed(now_min) {
+                        continue;
+                    }
+                    let running_in_q = live
+                        .values()
+                        .filter(|t| t.queue == q.name && t.status == Status::Running)
+                        .count();
+                    if running_in_q < q.max_concurrent as usize {
+                        eligible_queues.insert(q.name.as_str());
+                    }
+                }
+
+                if eligible_queues.is_empty() {
+                    return;
+                }
+
+                // Найстаріше завдання серед черг, що проходять перевірку
+                let next_id = live
+                    .values()
+                    .filter(|t| t.status == Status::Queued && eligible_queues.contains(t.queue.as_str()))
+                    .map(|t| t.id)
+                    .min();
+
+                let Some(id) = next_id else {
+                    return;
+                };
+
+                let Some(task) = live.get_mut(&id) else {
+                    return;
+                };
+
+                task.status = Status::Running;
+                task.error = None;
+
+                (
+                    task.id,
+                    task.protocol.clone(),
+                    task.url.clone(),
+                    task.targets.clone(),
+                    task.session.clone(),
+                    task.variant.clone(),
+                    task.queue.clone(),
+                )
+            };
+
+            let (id, protocol, url, targets, session, variant, queue_name) = job;
+            self.set_status(id, Status::Running, None);
+            self.clone()
+                .spawn_download(id, protocol, url, targets, session, variant, queue_name);
+        }
     }
 
     /// Зупинити завдання на прохання людини.
@@ -777,52 +876,18 @@ impl Engine {
             (task.url, task.protocol, targets)
         };
 
-        // Сесія і обраний варіант живуть у пам'яті поруч із завданням:
-        // продовжувати треба ту саму якість, а не ту, яку модуль вибере
-        // наново — інакше половина файла була б 720p, а половина 360p.
-        let (session, variant) = match self.live.lock() {
-            Ok(live) => live
-                .get(&id)
-                .map(|t| (t.session.clone(), t.variant.clone()))
-                .unwrap_or_default(),
-            Err(_) => (Session::default(), None),
-        };
-
-        let start_now = {
-            let Ok(live) = self.live.lock() else {
-                anyhow::bail!("список завдань отруєно");
-            };
-            self.вікно_відкрите()
-                && live
-                    .values()
-                    .filter(|t| t.status == Status::Running)
-                    .count()
-                    < self.стеля()
-        };
-
         if let Ok(mut live) = self.live.lock()
             && let Some(task) = live.get_mut(&id)
         {
-            task.status = if start_now {
-                Status::Running
-            } else {
-                Status::Queued
-            };
+            task.status = Status::Queued;
             task.error = None;
-            task.protocol = protocol.clone();
-            task.targets = targets.clone();
-            task.session = session.clone();
-            // Варіант не чіпаємо: продовжувати треба ту саму якість.
-            task.url = url.clone();
+            task.protocol = protocol;
+            task.targets = targets;
+            task.url = url;
         }
 
-        if start_now {
-            self.set_status(id, Status::Running, None);
-            self.clone()
-                .spawn_download(id, protocol, url, targets, session, variant);
-        } else {
-            self.set_status(id, Status::Queued, None);
-        }
+        self.set_status(id, Status::Queued, None);
+        self.clone().спробувати_наступне();
         self.clone().після_зміни_черги();
         Ok(())
     }
@@ -972,6 +1037,15 @@ impl Engine {
                 if open && !was {
                     tracing::info!("розклад: вікно відкрилось, стартую чергу");
                     self.clone().спробувати_наступне();
+                } else if open {
+                    let has_queued = self
+                        .live
+                        .lock()
+                        .map(|l| l.values().any(|t| t.status == Status::Queued))
+                        .unwrap_or(false);
+                    if has_queued {
+                        self.clone().спробувати_наступне();
+                    }
                 }
 
                 let limit = self
@@ -997,6 +1071,7 @@ impl Engine {
     }
 }
 
+#[cfg(test)]
 fn id_наступного_в_черзі(live: &HashMap<i64, Live>) -> Option<i64> {
     live.values()
         .filter(|t| t.status == Status::Queued)
@@ -1150,10 +1225,234 @@ impl Engine {
 
     fn після_зміни_черги(self: Arc<Self>) {
         let idle = self.черга_порожня();
-        let action = self.settings().post_action;
+        let mut action = self.settings().post_action;
+        if action == downloader_core::post_action::PostAction::None
+            && let Ok(store) = self.store.lock()
+            && let Ok(queues) = store.queues()
+        {
+            for q in queues {
+                if q.post_action != downloader_core::post_action::PostAction::None {
+                    action = q.post_action;
+                    break;
+                }
+            }
+        }
         let me = Arc::clone(&self);
         self.after
             .notify(idle, action, move || me.черга_порожня());
+    }
+
+    /// Отримати список усіх черг з лічильниками завдань.
+    pub fn queues(&self) -> Vec<downloader_ipc::protocol::QueueView> {
+        let rows = {
+            let Ok(store) = self.store.lock() else {
+                return Vec::new();
+            };
+            store.queues().unwrap_or_default()
+        };
+        let live = match self.live.lock() {
+            Ok(l) => l,
+            Err(_) => return Vec::new(),
+        };
+        rows.into_iter()
+            .map(|q| {
+                let total_tasks = live.values().filter(|t| t.queue == q.name).count();
+                let running_tasks = live
+                    .values()
+                    .filter(|t| t.queue == q.name && t.status == Status::Running)
+                    .count();
+                downloader_ipc::protocol::QueueView {
+                    id: q.id,
+                    name: q.name,
+                    max_concurrent: q.max_concurrent,
+                    rate_limit: q.rate_limit,
+                    paused: q.paused,
+                    schedule_from: q.schedule_from.map(downloader_core::format_hhmm),
+                    schedule_to: q.schedule_to.map(downloader_core::format_hhmm),
+                    post_action: q.post_action.as_str().to_owned(),
+                    total_tasks,
+                    running_tasks,
+                }
+            })
+            .collect()
+    }
+
+    /// Створити нову чергу.
+    pub fn create_queue(
+        &self,
+        name: String,
+        patch: downloader_core::store::QueuePatch,
+    ) -> anyhow::Result<()> {
+        let mut store = self
+            .store
+            .lock()
+            .map_err(|_| anyhow::anyhow!("сховище отруєно"))?;
+        store.create_queue(&name, &patch)?;
+        Ok(())
+    }
+
+    /// Змінити параметри існуючої черги.
+    pub fn configure_queue(
+        self: &Arc<Self>,
+        name: &str,
+        patch: downloader_core::store::QueuePatch,
+    ) -> anyhow::Result<()> {
+        {
+            let mut store = self
+                .store
+                .lock()
+                .map_err(|_| anyhow::anyhow!("сховище отруєно"))?;
+            store.update_queue(name, &patch)?;
+        }
+        if let Some(new_rate) = patch.rate_limit
+            && let Ok(mut limiters) = self.queue_limiters.lock()
+        {
+            if new_rate > 0 {
+                limiters.insert(
+                    name.to_owned(),
+                    Arc::new(downloader_core::rate::RateLimiter::new(new_rate)),
+                );
+            } else {
+                limiters.remove(name);
+            }
+        }
+        self.clone().спробувати_наступне();
+        self.clone().після_зміни_черги();
+        Ok(())
+    }
+
+    /// Призупинити чергу: поставити прапорець і зупинити активні завдання черги.
+    pub fn pause_queue(self: &Arc<Self>, name: &str) -> anyhow::Result<()> {
+        {
+            let mut store = self
+                .store
+                .lock()
+                .map_err(|_| anyhow::anyhow!("сховище отруєно"))?;
+            store.update_queue(
+                name,
+                &downloader_core::store::QueuePatch {
+                    paused: Some(true),
+                    ..Default::default()
+                },
+            )?;
+        }
+        let running_ids: Vec<i64> = {
+            let live = self
+                .live
+                .lock()
+                .map_err(|_| anyhow::anyhow!("список завдань отруєно"))?;
+            live.values()
+                .filter(|t| t.queue == name && t.status == Status::Running)
+                .map(|t| t.id)
+                .collect()
+        };
+        for id in running_ids {
+            let _ = self.pause(id);
+        }
+        self.clone().після_зміни_черги();
+        Ok(())
+    }
+
+    /// Відновити роботу черги: зняти паузу й перевести її paused-завдання в queued.
+    pub fn resume_queue(self: &Arc<Self>, name: &str) -> anyhow::Result<()> {
+        {
+            let mut store = self
+                .store
+                .lock()
+                .map_err(|_| anyhow::anyhow!("сховище отруєно"))?;
+            store.update_queue(
+                name,
+                &downloader_core::store::QueuePatch {
+                    paused: Some(false),
+                    ..Default::default()
+                },
+            )?;
+            let mut live = self
+                .live
+                .lock()
+                .map_err(|_| anyhow::anyhow!("список завдань отруєно"))?;
+            for task in live.values_mut() {
+                if task.queue == name && task.status == Status::Paused {
+                    task.status = Status::Queued;
+                    task.error = None;
+                    let _ = store.set_status(task.id, Status::Queued, None);
+                }
+            }
+        }
+        self.clone().спробувати_наступне();
+        self.clone().після_зміни_черги();
+        Ok(())
+    }
+
+    /// Перейменувати чергу.
+    pub fn rename_queue(&self, old_name: &str, new_name: &str) -> anyhow::Result<()> {
+        {
+            let mut store = self
+                .store
+                .lock()
+                .map_err(|_| anyhow::anyhow!("сховище отруєно"))?;
+            store.rename_queue(old_name, new_name)?;
+        }
+        if let Ok(mut live) = self.live.lock() {
+            for task in live.values_mut() {
+                if task.queue == old_name {
+                    task.queue = new_name.to_owned();
+                }
+            }
+        }
+        if let Ok(mut limiters) = self.queue_limiters.lock()
+            && let Some(lim) = limiters.remove(old_name)
+        {
+            limiters.insert(new_name.to_owned(), lim);
+        }
+        Ok(())
+    }
+
+    /// Видалити чергу (перевівши її завдання в default).
+    pub fn delete_queue(self: &Arc<Self>, name: &str) -> anyhow::Result<()> {
+        {
+            let mut store = self
+                .store
+                .lock()
+                .map_err(|_| anyhow::anyhow!("сховище отруєно"))?;
+            store.delete_queue(name)?;
+        }
+        if let Ok(mut live) = self.live.lock() {
+            for task in live.values_mut() {
+                if task.queue == name {
+                    task.queue = downloader_core::store::DEFAULT_QUEUE.to_owned();
+                }
+            }
+        }
+        if let Ok(mut limiters) = self.queue_limiters.lock() {
+            limiters.remove(name);
+        }
+        self.clone().спробувати_наступне();
+        self.clone().після_зміни_черги();
+        Ok(())
+    }
+
+    /// Перемістити завдання в іншу чергу.
+    pub fn move_task_to_queue(
+        self: &Arc<Self>,
+        task_id: i64,
+        new_queue: &str,
+    ) -> anyhow::Result<()> {
+        {
+            let mut store = self
+                .store
+                .lock()
+                .map_err(|_| anyhow::anyhow!("сховище отруєно"))?;
+            store.set_task_queue(task_id, new_queue)?;
+        }
+        if let Ok(mut live) = self.live.lock()
+            && let Some(task) = live.get_mut(&task_id)
+        {
+            task.queue = new_queue.to_owned();
+        }
+        self.clone().спробувати_наступне();
+        self.clone().після_зміни_черги();
+        Ok(())
     }
 }
 
@@ -1196,6 +1495,7 @@ mod tests {
             protocol: "http".into(),
             targets: vec![],
             parts: Vec::new(),
+            queue: downloader_core::store::DEFAULT_QUEUE.to_owned(),
         }
     }
 
@@ -1299,5 +1599,14 @@ mod tests {
         let files = vec![file("a.bin", false), file("b.bin", false)];
         let out = paths_for_selected(&files, None, &dir);
         assert!(out.is_empty());
+    }
+
+    #[test]
+    fn to_view_містить_назву_черги() {
+        let mut sample = зразок(42, "https://example.com/test", Status::Queued);
+        sample.queue = "nightly".to_owned();
+        let view = sample.to_view();
+        assert_eq!(view.id, 42);
+        assert_eq!(view.queue, "nightly");
     }
 }
