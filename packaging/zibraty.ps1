@@ -14,8 +14,7 @@
 
 [CmdletBinding()]
 param(
-    # Версія продукту. MSI вимагає числовий вигляд X.Y.Z.
-    [ValidatePattern('^\d+\.\d+\.\d+$')]
+    # Версія продукту. MSI вимагає числовий вигляд X.Y.Z (наприклад, 0.1.0 або v0.1.0-test, який буде очищено).
     [string]$Version = '0.1.0',
 
     # Пропустити збірку й лише запакувати вже зібране.
@@ -23,10 +22,19 @@ param(
 
     # Які пакети зібрати: web (без ffmpeg), full (з ним) або обидва.
     [ValidateSet('both', 'web', 'full')]
-    [string]$Пакети = 'both'
+    [string]$Пакети = 'both',
+
+    # Автоматично завантажити LGPL-збірку ffmpeg, якщо вона відсутня
+    [switch]$ЗавантажитиFfmpeg
 )
 
 $ErrorActionPreference = 'Stop'
+
+# Нормалізуємо версію до числового вигляду X.Y.Z для WiX MSI:
+$Version = ($Version -replace '^v', '') -replace '-.*$', ''
+if ($Version -notmatch '^\d+\.\d+\.\d+$') {
+    throw "Некоректний формат версії: '$Version'. MSI вимагає вигляд X.Y.Z."
+}
 
 $корінь   = Split-Path -Parent $PSScriptRoot
 $release  = Join-Path $корінь 'target\release'
@@ -109,6 +117,33 @@ if ($Пакети -in 'both', 'web') {
 }
 
 if ($Пакети -in 'both', 'full') {
+    $ffmpegExe = Join-Path $ffmpeg 'ffmpeg.exe'
+    if (-not (Test-Path $ffmpegExe)) {
+        if ($ЗавантажитиFfmpeg) {
+            Write-Host '→ завантаження LGPL ffmpeg...' -ForegroundColor Cyan
+            New-Item -ItemType Directory -Force -Path $ffmpeg | Out-Null
+            $zipUrl = 'https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-lgpl-shared.zip'
+            $tmpZip = Join-Path ([System.IO.Path]::GetTempPath()) "ffmpeg-$([System.Guid]::NewGuid()).zip"
+            $tmpDir = Join-Path ([System.IO.Path]::GetTempPath()) "ffmpeg-$([System.Guid]::NewGuid())"
+            try {
+                Invoke-WebRequest -Uri $zipUrl -OutFile $tmpZip -UserAgent 'Downloader-CI' -UseBasicParsing
+                Expand-Archive -Path $tmpZip -DestinationPath $tmpDir -Force
+                $extractedRoot = Get-ChildItem -Directory $tmpDir | Select-Object -First 1
+                $binDir = Join-Path $extractedRoot.FullName 'bin'
+                Get-ChildItem -Path $binDir | Copy-Item -Destination $ffmpeg -Force
+                $licenseSrc = Join-Path $extractedRoot.FullName 'LICENSE.txt'
+                if (Test-Path $licenseSrc) {
+                    Copy-Item $licenseSrc (Join-Path $ffmpeg 'LICENSE-ffmpeg.txt') -Force
+                }
+                $ffplay = Join-Path $ffmpeg 'ffplay.exe'
+                if (Test-Path $ffplay) { Remove-Item $ffplay -Force }
+            }
+            finally {
+                if (Test-Path $tmpZip) { Remove-Item $tmpZip -Force -ErrorAction SilentlyContinue }
+                if (Test-Path $tmpDir) { Remove-Item $tmpDir -Recurse -Force -ErrorAction SilentlyContinue }
+            }
+        }
+    }
     if (-not (Test-Path (Join-Path $ffmpeg 'ffmpeg.exe'))) {
         throw @"
 для повного пакета потрібен ffmpeg у $ffmpeg
@@ -120,6 +155,17 @@ if ($Пакети -in 'both', 'full') {
     }
     Зібрати-Пакет -Назва 'full' -FfmpegDir $ffmpeg
 }
+
+# Обчислення контрольних сум SHA-256
+$checksumFile = Join-Path $вихід 'SHA256SUMS.txt'
+$hashLines = @()
+foreach ($item in $зібрані) {
+    $hash = (Get-FileHash -Path $item.Шлях -Algorithm SHA256).Hash.ToLowerInvariant()
+    $leafName = Split-Path $item.Шлях -Leaf
+    $hashLines += "$hash  $leafName"
+}
+[System.IO.File]::WriteAllLines($checksumFile, [string[]]$hashLines, [System.Text.UTF8Encoding]::new($false))
+Write-Host "→ контрольні суми збережено у $checksumFile" -ForegroundColor Cyan
 
 Write-Host ""
 foreach ($п in $зібрані) {
