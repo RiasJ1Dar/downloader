@@ -328,23 +328,30 @@ public sealed partial class MainViewModel : ObservableObject
     /// </remarks>
     private void ApplySnapshot(List<TaskView> snapshot)
     {
+        var existingById = new Dictionary<long, TaskRow>(Tasks.Count);
+        foreach (TaskRow task in Tasks)
+        {
+            existingById[task.Id] = task;
+        }
+
+        var snapshotIds = new HashSet<long>(snapshot.Count);
         foreach (TaskView view in snapshot)
         {
-            TaskRow? row = Tasks.FirstOrDefault(t => t.Id == view.Id);
-            if (row is null)
-            {
-                Tasks.Add(new TaskRow(view));
-            }
-            else
+            snapshotIds.Add(view.Id);
+            if (existingById.TryGetValue(view.Id, out TaskRow? row))
             {
                 row.Update(view);
             }
+            else
+            {
+                Tasks.Add(new TaskRow(view));
+            }
         }
 
-        // Прибрати те, чого в ядрі вже немає.
+        // Прибрати те, чого в ядрі вже немає (O(1) перевірка через HashSet замість O(N*M) All).
         for (int i = Tasks.Count - 1; i >= 0; i--)
         {
-            if (snapshot.All(v => v.Id != Tasks[i].Id))
+            if (!snapshotIds.Contains(Tasks[i].Id))
             {
                 if (ReferenceEquals(Selected, Tasks[i]))
                 {

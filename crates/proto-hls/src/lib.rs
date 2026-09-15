@@ -8,20 +8,21 @@
 mod decrypt;
 mod playlist;
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
 use downloader_core::error::{Error, Result};
 use downloader_core::protocol::{
-    Variant,
     Cancel, PlannedFile, Probed, Progress, ProgressSink, Protocol, RateLimitSupport,
-    ResumeBlob, RunContext, Session,
+    ResumeBlob, RunContext, Session, Variant,
 };
+use downloader_core::rate::RateLimiter;
 use downloader_proto_http::apply_session;
-use downloader_proto_http::download::{Options, download};
+use futures_util::StreamExt;
 use reqwest::Client;
 
 use decrypt::{iv_з_sequence, розшифрувати};
@@ -34,6 +35,7 @@ use playlist::{
 pub struct HlsProtocol {
     client: Client,
     rate_limit: Mutex<u64>,
+    limiter: Arc<RateLimiter>,
     /// Для `probe`, де немає [`RunContext`]. `run` бере сесію з контексту.
     session: Mutex<Session>,
 }
@@ -45,6 +47,7 @@ impl HlsProtocol {
         Ok(Self {
             client,
             rate_limit: Mutex::new(0),
+            limiter: Arc::new(RateLimiter::unlimited()),
             session: Mutex::new(Session::default()),
         })
     }
@@ -176,6 +179,7 @@ impl Protocol for HlsProtocol {
         match self.rate_limit.lock() {
             Ok(mut g) => {
                 *g = bytes_per_sec;
+                self.limiter.set_limit(bytes_per_sec);
                 RateLimitSupport::Applied
             }
             Err(_) => RateLimitSupport::Unsupported,
@@ -314,17 +318,32 @@ impl HlsProtocol {
         cancel: &Cancel,
         session: &Session,
     ) -> Result<Option<ResumeBlob>> {
-        let tmp = dest.with_extension("hls-parts");
-        std::fs::create_dir_all(&tmp)?;
+        let хоче_mp4 = dest
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| e.eq_ignore_ascii_case("mp4"));
+        let out_path = if хоче_mp4 && !перша.сегменти.iter().any(|s| s.discontinuity) {
+            dest.with_extension("ts")
+        } else {
+            dest.to_path_buf()
+        };
+        if let Some(p) = out_path.parent() {
+            std::fs::create_dir_all(p)?;
+        }
+        let mut out_file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&out_path)?;
+
         let mut seen = HashSet::new();
-        let mut зібрані = Vec::new();
         let mut done = 0u64;
-        let mut next_offset = 0u64;
         let mut discontinuity = false;
         let mut target_duration = перша.target_duration.max(1);
         let mut підряд_помилок = 0u8;
-        let ліміт = self.rate_limit.lock().map(|g| *g).unwrap_or(0);
+        let limiter = self.limiter.clone();
+        let key_cache = Arc::new(tokio::sync::Mutex::new(HashMap::new()));
         let mut медіа = перша;
+
         loop {
             if cancel.is_cancelled() {
                 return Ok(Some(Vec::new()));
@@ -334,20 +353,23 @@ impl HlsProtocol {
                     continue;
                 }
                 discontinuity |= seg.discontinuity;
-                let part = tmp.join(format!("seg-{}.bin", seg.sequence));
-                let bytes = качати_сегмент(
+                let bytes = качати_сегмент_у_памʼять(
                     &self.client,
                     seg,
-                    &part,
-                    ліміт,
-                    &mut next_offset,
+                    None,
                     session,
+                    &key_cache,
+                    &limiter,
+                    cancel,
                 )
                 .await?;
-                done += bytes.len() as u64;
+                if cancel.is_cancelled() {
+                    return Ok(Some(Vec::new()));
+                }
+                out_file.write_all(&bytes)?;
+                done = done.saturating_add(bytes.len() as u64);
                 sink.report(Progress::Advanced { done });
                 sink.report(Progress::Segments { count: seen.len() });
-                зібрані.push(part);
             }
             if медіа.end_list {
                 break;
@@ -374,7 +396,7 @@ impl HlsProtocol {
             };
             target_duration = медіа.target_duration.max(1);
         }
-        if зібрані.is_empty() {
+        if seen.is_empty() {
             return Err(Error::Store(
                 "HLS live завершився без жодного сегмента".to_owned(),
             ));
@@ -383,9 +405,19 @@ impl HlsProtocol {
             tracing::warn!("EXT-X-DISCONTINUITY: склейка може мати зламані таймстемпи");
         }
         sink.report(Progress::TotalKnown { total: done });
-        зшити_або_mp4(&зібрані, dest, discontinuity)?;
-        if let Err(e) = std::fs::remove_dir_all(&tmp) {
-            tracing::warn!("не прибрати тимчасові сегменти HLS: {e}");
+        out_file.flush()?;
+        drop(out_file);
+
+        if хоче_mp4 && !discontinuity {
+            match спробувати_ffmpeg_mp4(&out_path, dest) {
+                Ok(()) => {
+                    let _ = std::fs::remove_file(&out_path);
+                }
+                Err(e) => {
+                    tracing::warn!("ffmpeg remux не вийшов ({e}), лишаємо TS як є");
+                    std::fs::rename(&out_path, dest).map_err(Error::from)?;
+                }
+            }
         }
         Ok(None)
     }
@@ -399,39 +431,102 @@ impl HlsProtocol {
         done: &mut u64,
         session: &Session,
     ) -> Result<Option<ResumeBlob>> {
-        if сегменти.iter().any(|s| s.discontinuity) {
+        let discontinuity = сегменти.iter().any(|s| s.discontinuity);
+        if discontinuity {
             tracing::warn!("EXT-X-DISCONTINUITY: склейка може мати зламані таймстемпи");
         }
         sink.report(Progress::Segments {
             count: сегменти.len(),
         });
-        let tmp = dest.with_extension("hls-parts");
-        std::fs::create_dir_all(&tmp)?;
-        let mut зібрані = Vec::new();
+
+        let хоче_mp4 = dest
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| e.eq_ignore_ascii_case("mp4"));
+        let out_path = if хоче_mp4 && !discontinuity {
+            dest.with_extension("ts")
+        } else {
+            dest.to_path_buf()
+        };
+        if let Some(p) = out_path.parent() {
+            std::fs::create_dir_all(p)?;
+        }
+        let mut out_file = std::fs::File::create(&out_path)?;
+
         let mut next_offset = 0u64;
-        let ліміт = self.rate_limit.lock().map(|g| *g).unwrap_or(0);
-        for (i, seg) in сегменти.iter().enumerate() {
+        let byte_ranges: Vec<Option<(u64, u64)>> = сегменти
+            .iter()
+            .map(|seg| {
+                if let Some((length, offset)) = seg.byte_range {
+                    let start = offset.unwrap_or(next_offset);
+                    next_offset = start.saturating_add(length);
+                    Some((start, length))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        let limiter = self.limiter.clone();
+        let key_cache = Arc::new(tokio::sync::Mutex::new(HashMap::new()));
+
+        const CONCURRENT_SEGMENTS: usize = 6;
+        let tasks: Vec<_> = сегменти.iter().cloned().enumerate().map(|(i, seg)| {
+            let client = self.client.clone();
+            let range = byte_ranges[i];
+            let session = session.clone();
+            let limiter = limiter.clone();
+            let key_cache = key_cache.clone();
+            let cancel = cancel.clone();
+
+            async move {
+                if cancel.is_cancelled() {
+                    return Ok::<Option<(usize, Vec<u8>)>, Error>(None);
+                }
+                let bytes = качати_сегмент_у_памʼять(
+                    &client,
+                    &seg,
+                    range,
+                    &session,
+                    &key_cache,
+                    &limiter,
+                    &cancel,
+                )
+                .await?;
+                Ok(Some((i, bytes)))
+            }
+        })
+        .collect();
+
+        let stream = futures_util::stream::iter(tasks).buffered(CONCURRENT_SEGMENTS);
+        tokio::pin!(stream);
+
+        while let Some(res) = stream.next().await {
             if cancel.is_cancelled() {
                 return Ok(Some(Vec::new()));
             }
-            let part = tmp.join(format!("seg-{i}.bin"));
-            let bytes = качати_сегмент(
-                &self.client,
-                seg,
-                &part,
-                ліміт,
-                &mut next_offset,
-                session,
-            )
-            .await?;
+            let Some((_i, bytes)) = res? else {
+                return Ok(Some(Vec::new()));
+            };
+            out_file.write_all(&bytes)?;
             *done = done.saturating_add(bytes.len() as u64);
             sink.report(Progress::Advanced { done: *done });
-            зібрані.push(part);
         }
+
         sink.report(Progress::TotalKnown { total: *done });
-        зшити_або_mp4(&зібрані, dest, сегменти.iter().any(|s| s.discontinuity))?;
-        if let Err(e) = std::fs::remove_dir_all(&tmp) {
-            tracing::warn!("не прибрати тимчасові сегменти HLS: {e}");
+        out_file.flush()?;
+        drop(out_file);
+
+        if хоче_mp4 && !discontinuity {
+            match спробувати_ffmpeg_mp4(&out_path, dest) {
+                Ok(()) => {
+                    let _ = std::fs::remove_file(&out_path);
+                }
+                Err(e) => {
+                    tracing::warn!("ffmpeg remux не вийшов ({e}), лишаємо TS як є");
+                    std::fs::rename(&out_path, dest).map_err(Error::from)?;
+                }
+            }
         }
         Ok(None)
     }
@@ -679,41 +774,170 @@ fn основа_імені(stem: &str) -> &str {
     stem
 }
 
-async fn качати_сегмент(
+async fn read_stream_limited(
+    resp: reqwest::Response,
+    limiter: &RateLimiter,
+    cancel: &Cancel,
+) -> Result<Vec<u8>> {
+    let mut stream = resp.bytes_stream();
+    let mut out = Vec::new();
+
+    while let Some(chunk_res) = stream.next().await {
+        if cancel.is_cancelled() {
+            return Ok(Vec::new());
+        }
+        let chunk = chunk_res.map_err(|e| Error::Store(format!("помилка читання стріму: {e}")))?;
+        let mut left = &chunk[..];
+        while !left.is_empty() {
+            if cancel.is_cancelled() {
+                return Ok(Vec::new());
+            }
+            let allowance = limiter.take(left.len() as u64);
+            if allowance.allowed == 0 {
+                if let Some(pause) = allowance.wait {
+                    tokio::time::sleep(pause).await;
+                }
+                continue;
+            }
+            let take = usize::try_from(allowance.allowed).unwrap_or(usize::MAX).min(left.len());
+            out.extend_from_slice(&left[..take]);
+            left = &left[take..];
+        }
+    }
+    Ok(out)
+}
+
+async fn fetch_range_limited(
+    client: &Client,
+    url: &str,
+    start: u64,
+    length: u64,
+    session: &Session,
+    limiter: &RateLimiter,
+    cancel: &Cancel,
+) -> Result<Vec<u8>> {
+    if length == 0 {
+        return Ok(Vec::new());
+    }
+    let end = start.saturating_add(length).saturating_sub(1);
+    let resp = apply_session(client.get(url), session)
+        .header(reqwest::header::RANGE, format!("bytes={start}-{end}"))
+        .send()
+        .await
+        .map_err(|e| Error::Store(format!("GET Range {url}: {e}")))?;
+    let status = resp.status();
+    if status != reqwest::StatusCode::PARTIAL_CONTENT && !status.is_success() {
+        return Err(Error::Store(format!(
+            "GET Range {url}: HTTP {status}"
+        )));
+    }
+    let bytes = read_stream_limited(resp, limiter, cancel).await?;
+    if cancel.is_cancelled() {
+        return Ok(Vec::new());
+    }
+    if status == reqwest::StatusCode::PARTIAL_CONTENT {
+        if bytes.len() as u64 != length {
+            return Err(Error::Store(format!(
+                "Range {url}: чекали {length} байтів, маємо {}",
+                bytes.len()
+            )));
+        }
+        return Ok(bytes);
+    }
+    let start_idx = usize::try_from(start).map_err(|_| {
+        Error::Store("зсув BYTERANGE не вміщується в usize".to_owned())
+    })?;
+    let end_idx = start_idx
+        .checked_add(usize::try_from(length).map_err(|_| {
+            Error::Store("довжина BYTERANGE не вміщується в usize".to_owned())
+        })?)
+        .ok_or_else(|| Error::Store("переповнення BYTERANGE".to_owned()))?;
+    if end_idx > bytes.len() {
+        return Err(Error::Store(format!(
+            "BYTERANGE {start}..{end} поза тілом {}",
+            bytes.len()
+        )));
+    }
+    Ok(bytes[start_idx..end_idx].to_vec())
+}
+
+async fn fetch_segment_limited(
+    client: &Client,
+    url: &str,
+    session: &Session,
+    limiter: &RateLimiter,
+    cancel: &Cancel,
+) -> Result<Vec<u8>> {
+    let mut attempt = 0u32;
+    loop {
+        if cancel.is_cancelled() {
+            return Ok(Vec::new());
+        }
+        let req = apply_session(client.get(url), session);
+        let resp = match req.send().await {
+            Ok(r) => r,
+            Err(e) => {
+                attempt += 1;
+                if attempt >= 4 {
+                    return Err(Error::Store(format!("GET {url}: {e}")));
+                }
+                tokio::time::sleep(Duration::from_millis(100 * u64::from(attempt))).await;
+                continue;
+            }
+        };
+
+        let status = resp.status();
+        if !status.is_success() {
+            if (status.as_u16() == 429 || status.is_server_error()) && attempt < 3 {
+                attempt += 1;
+                tokio::time::sleep(Duration::from_millis(100 * u64::from(attempt))).await;
+                continue;
+            }
+            return Err(Error::Store(format!("GET {url}: HTTP {status}")));
+        }
+
+        let bytes = read_stream_limited(resp, limiter, cancel).await?;
+        return Ok(bytes);
+    }
+}
+
+async fn качати_сегмент_у_памʼять(
     client: &Client,
     seg: &Сегмент,
-    part: &Path,
-    rate_limit: u64,
-    next_offset: &mut u64,
+    range: Option<(u64, u64)>,
     session: &Session,
+    key_cache: &tokio::sync::Mutex<HashMap<String, Vec<u8>>>,
+    limiter: &RateLimiter,
+    cancel: &Cancel,
 ) -> Result<Vec<u8>> {
-    let mut bytes = if let Some((length, offset)) = seg.byte_range {
-        let start = offset.unwrap_or(*next_offset);
-        *next_offset = start.saturating_add(length);
-        fetch_range(client, &seg.uri, start, length, session).await?
+    let mut bytes = if let Some((start, length)) = range {
+        fetch_range_limited(client, &seg.uri, start, length, session, limiter, cancel).await?
     } else {
-        let opts = Options {
-            parts: 1,
-            rate_limit,
-            session: session.clone(),
-            ..Options::default()
-        };
-        download(client, &seg.uri, part, &opts)
-            .await
-            .map_err(|e| Error::Store(e.to_string()))?;
-        std::fs::read(part)?
+        fetch_segment_limited(client, &seg.uri, session, limiter, cancel).await?
     };
+
+    if cancel.is_cancelled() {
+        return Ok(Vec::new());
+    }
+
     if let Some(k) = &seg.key {
         match k.метод {
             crate::decrypt::МетодКлюча::Aes128 => {}
         }
-        let key_bytes = fetch_bytes(client, &k.uri, session).await?;
+        let key_bytes = {
+            let mut cache = key_cache.lock().await;
+            if let Some(cached) = cache.get(&k.uri) {
+                cached.clone()
+            } else {
+                let fetched = fetch_bytes(client, &k.uri, session).await?;
+                cache.insert(k.uri.clone(), fetched.clone());
+                fetched
+            }
+        };
         let iv = k.iv.unwrap_or_else(|| iv_з_sequence(seg.sequence));
         bytes = розшифрувати(&bytes, &key_bytes, &iv)?;
-        std::fs::write(part, &bytes)?;
-    } else if seg.byte_range.is_some() {
-        std::fs::write(part, &bytes)?;
     }
+
     Ok(bytes)
 }
 
@@ -804,59 +1028,6 @@ async fn fetch_text(client: &Client, url: &str, session: &Session) -> Result<Str
         .map_err(|e| Error::Store(format!("тіло {url}: {e}")))
 }
 
-async fn fetch_range(
-    client: &Client,
-    url: &str,
-    start: u64,
-    length: u64,
-    session: &Session,
-) -> Result<Vec<u8>> {
-    if length == 0 {
-        return Ok(Vec::new());
-    }
-    let end = start.saturating_add(length).saturating_sub(1);
-    let resp = apply_session(client.get(url), session)
-        .header(reqwest::header::RANGE, format!("bytes={start}-{end}"))
-        .send()
-        .await
-        .map_err(|e| Error::Store(format!("GET Range {url}: {e}")))?;
-    let status = resp.status();
-    if status != reqwest::StatusCode::PARTIAL_CONTENT && !status.is_success() {
-        return Err(Error::Store(format!(
-            "GET Range {url}: HTTP {status}"
-        )));
-    }
-    let bytes = resp
-        .bytes()
-        .await
-        .map_err(|e| Error::Store(format!("тіло Range {url}: {e}")))?;
-    if status == reqwest::StatusCode::PARTIAL_CONTENT {
-        if bytes.len() as u64 != length {
-            return Err(Error::Store(format!(
-                "Range {url}: чекали {length} байтів, маємо {}",
-                bytes.len()
-            )));
-        }
-        return Ok(bytes.to_vec());
-    }
-    // Сервер знехтував Range і віддав усе — ріжемо самі, не пишемо зайве.
-    let start = usize::try_from(start).map_err(|_| {
-        Error::Store("зсув BYTERANGE не вміщується в usize".to_owned())
-    })?;
-    let end = start
-        .checked_add(usize::try_from(length).map_err(|_| {
-            Error::Store("довжина BYTERANGE не вміщується в usize".to_owned())
-        })?)
-        .ok_or_else(|| Error::Store("переповнення BYTERANGE".to_owned()))?;
-    if end > bytes.len() {
-        return Err(Error::Store(format!(
-            "BYTERANGE {start}..{end} поза тілом {}",
-            bytes.len()
-        )));
-    }
-    Ok(bytes[start..end].to_vec())
-}
-
 async fn fetch_bytes(client: &Client, url: &str, session: &Session) -> Result<Vec<u8>> {
     let resp = apply_session(client.get(url), session)
         .send()
@@ -872,45 +1043,7 @@ async fn fetch_bytes(client: &Client, url: &str, session: &Session) -> Result<Ve
         .map_err(|e| Error::Store(format!("тіло {url}: {e}")))
 }
 
-fn зшити(parts: &[PathBuf], dest: &Path) -> Result<()> {
-    let mut out = std::fs::File::create(dest)?;
-    for p in parts {
-        let mut f = std::fs::File::open(p)?;
-        std::io::copy(&mut f, &mut out)?;
-    }
-    Ok(())
-}
 
-/// Склеїти `.ts`. Якщо ціль `.mp4` і є `ffmpeg` — remux `copy` + `faststart`.
-/// При `EXT-X-DISCONTINUITY` concat не надійний — лишаємо `.ts`.
-fn зшити_або_mp4(parts: &[PathBuf], dest: &Path, discontinuity: bool) -> Result<()> {
-    let хоче_mp4 = dest
-        .extension()
-        .and_then(|e| e.to_str())
-        .is_some_and(|e| e.eq_ignore_ascii_case("mp4"));
-    if !хоче_mp4 || discontinuity {
-        if discontinuity && хоче_mp4 {
-            tracing::warn!(
-                "EXT-X-DISCONTINUITY: ffmpeg concat може зламати таймстемпи, лишаємо TS"
-            );
-        }
-        return зшити(parts, dest);
-    }
-    let ts = dest.with_extension("ts");
-    зшити(parts, &ts)?;
-    match спробувати_ffmpeg_mp4(&ts, dest) {
-        Ok(()) => {
-            if let Err(e) = std::fs::remove_file(&ts) {
-                tracing::warn!("не прибрати проміжний TS: {e}");
-            }
-            Ok(())
-        }
-        Err(e) => {
-            tracing::warn!("ffmpeg remux не вийшов ({e}), лишаємо TS як є");
-            std::fs::rename(&ts, dest).map_err(Error::from)
-        }
-    }
-}
 
 fn спробувати_ffmpeg_mp4(ts: &Path, dest: &Path) -> Result<()> {
     let status = std::process::Command::new("ffmpeg")

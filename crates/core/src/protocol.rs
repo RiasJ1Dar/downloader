@@ -420,6 +420,13 @@ impl Registry {
     pub fn names(&self) -> Vec<&'static str> {
         self.protocols.iter().map(|p| p.name()).collect()
     }
+
+    /// Оновити ліміт швидкості для всіх модулів у реєстрі.
+    pub fn set_rate_limit(&self, bytes_per_sec: u64) {
+        for p in &self.protocols {
+            p.set_rate_limit(bytes_per_sec);
+        }
+    }
 }
 
 #[cfg(test)]

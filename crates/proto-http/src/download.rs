@@ -41,6 +41,8 @@ pub struct Options {
     /// Ділиться на всі з'єднання одного завантаження: людина ставить ліміт
     /// на файл, а не на потік.
     pub rate_limit: u64,
+    /// Спільний обмежувач швидкості для динамічної зміни ліміту на льоту.
+    pub limiter: Option<std::sync::Arc<RateLimiter>>,
     /// Прапорець зупинки від ядра.
     ///
     /// `None` — качання неперервне (звичайний `dl get`).
@@ -75,6 +77,7 @@ impl Default for Options {
             min_chunk: 1 << 20,
             max_retries: 5,
             rate_limit: 0,
+            limiter: None,
             cancel: None,
             on_progress: None,
             checkpoint_every: std::time::Duration::from_secs(2),
@@ -166,7 +169,7 @@ struct Shared {
     /// Ознака версії ресурсу для файла стану.
     fingerprint: Option<String>,
     /// Спільна на всі з'єднання стеля швидкості.
-    limiter: RateLimiter,
+    limiter: Arc<RateLimiter>,
     opts: Options,
     /// Таблиця сегментів і черга ще не роздертих.
     ///
@@ -235,7 +238,10 @@ pub async fn download_with_probe(
         resumable: info.resumable,
         dest: dest.to_path_buf(),
         fingerprint,
-        limiter: RateLimiter::new(opts.rate_limit),
+        limiter: opts
+            .limiter
+            .clone()
+            .unwrap_or_else(|| Arc::new(RateLimiter::new(opts.rate_limit))),
         opts: opts.clone(),
         state: Mutex::new(State { table, pending }),
     });
@@ -339,9 +345,64 @@ async fn checkpoint_loop(shared: Arc<Shared>) {
     // Перший тик спрацьовує негайно — пропускаємо, качати ще нічого.
     tick.tick().await;
 
+    let mut last_done = 0u64;
+
     loop {
         tick.tick().await;
-        checkpoint(&shared);
+        last_done = checkpoint_step(&shared, last_done);
+    }
+}
+
+/// Крок чекпоінту: репортує прогрес і, якщо з'явилися нові байти,
+/// скидає дані на диск і оновлює файл стану.
+fn checkpoint_step(shared: &Shared, last_done: u64) -> u64 {
+    let Ok(state) = shared.state.lock() else {
+        return last_done;
+    };
+
+    let done = state.table.downloaded();
+    let segments = state.table.len();
+
+    let parts: Vec<downloader_core::protocol::PartProgress> = state
+        .table
+        .segments()
+        .iter()
+        .map(|s| downloader_core::protocol::PartProgress {
+            start: s.start,
+            end: s.end,
+            done: s.done,
+        })
+        .collect();
+
+    let should_save = shared.resumable && done > last_done;
+    let snapshot = if should_save {
+        Some(DownloadState::from_table(
+            PROTOCOL,
+            &shared.url,
+            &state.table,
+            shared.fingerprint.clone(),
+        ))
+    } else {
+        None
+    };
+
+    drop(state);
+
+    if let Some(report) = &shared.opts.on_progress {
+        report(done, segments, parts);
+    }
+
+    if let Some(snapshot) = snapshot {
+        if let Err(e) = shared.file.sync() {
+            tracing::warn!(error = %e, "не вдалося скинути дані на диск — стан не оновлюю");
+            return last_done;
+        }
+        if let Err(e) = state::save(&shared.dest, &snapshot) {
+            tracing::warn!(error = %e, "не вдалося зберегти стан завантаження");
+        }
+        done
+    } else {
+        last_done
     }
 }
 
@@ -350,59 +411,8 @@ async fn checkpoint_loop(shared: Arc<Shared>) {
 /// ⚠️ Порядок не міняти. Якщо записати стан раніше за `sync`, після падіння
 /// живлення стан казатиме «завантажено», а байтів не буде — і докачування
 /// піде з дірки, якої ніхто не помітить.
-fn checkpoint(shared: &Arc<Shared>) {
-    // Про поступ повідомляємо завжди — навіть коли стан на диск не пишемо
-    // (сервер без `Range`): людина однаково має бачити рух.
-    if let Some(report) = &shared.opts.on_progress
-        && let Ok(state) = shared.state.lock()
-    {
-        let done = state.table.downloaded();
-        let segments = state.table.len();
-
-        // Розкладку збираємо тут, під тим самим локом, що й решту чисел:
-        // інакше смужка показувала б межі з одного моменту, а прогрес — з
-        // іншого, і на очах у людини вони б не сходились.
-        let parts: Vec<downloader_core::protocol::PartProgress> = state
-            .table
-            .segments()
-            .iter()
-            .map(|s| downloader_core::protocol::PartProgress {
-                start: s.start,
-                end: s.end,
-                done: s.done,
-            })
-            .collect();
-
-        drop(state);
-        report(done, segments, parts);
-    }
-
-    if !shared.resumable {
-        // Докачати все одно не вийде — файл стану лише збивав би з пантелику.
-        return;
-    }
-
-    if let Err(e) = shared.file.sync() {
-        tracing::warn!(error = %e, "не вдалося скинути дані на диск — стан не оновлюю");
-        return;
-    }
-
-    let Ok(state) = shared.state.lock() else {
-        tracing::error!("стан завантаження отруєно — чекпоінт пропущено");
-        return;
-    };
-
-    let snapshot = DownloadState::from_table(
-        PROTOCOL,
-        &shared.url,
-        &state.table,
-        shared.fingerprint.clone(),
-    );
-    drop(state);
-
-    if let Err(e) = state::save(&shared.dest, &snapshot) {
-        tracing::warn!(error = %e, "не вдалося зберегти стан завантаження");
-    }
+fn checkpoint(shared: &Shared) {
+    checkpoint_step(shared, 0);
 }
 
 /// Один воркер: бере завдання, доки вони є.
@@ -655,32 +665,41 @@ async fn pull(
             // Лок тут тримається на час одного системного виклику в
             // сторінковий кеш — без очікування диска (`sync` окремо) і без
             // жодного `await`. Це десятки мікросекунд, і воно того варте.
-            let written = {
+            let (write_offset, n) = {
                 let mut state = shared
                     .state
                     .lock()
                     .map_err(|_| DownloadError::Internal("стан завантаження отруєно".into()))?;
 
-                let Some(seg_now) = state.table.get(id) else {
-                    return Ok(());
-                };
-                if offset >= seg_now.end {
-                    return Ok(());
+                match state.table.reserve_write(id, want as u64) {
+                    Some((off, n)) => (off, n as usize),
+                    None => return Ok(()),
                 }
-
-                let room = usize::try_from(seg_now.end - offset).unwrap_or(usize::MAX);
-                let n = want.min(room);
-                if n == 0 {
-                    return Ok(());
-                }
-
-                shared.file.write_all_at(offset, &left[..n])?;
-                state.table.advance(id, n as u64)?;
-                n
             };
 
-            offset += written as u64;
-            left = &left[written..];
+            // ⚠️ ЗАПИС ПОЗА М'ЮТЕКСОМ!
+            // Завдяки резервуванню в SegmentTable інший воркер не вкраде цей
+            // діапазон через steal(): поділ відбувається лише після зарезервованої
+            // межі. Тому write_all_at безпечно виконується паралельно всіма
+            // воркерами без блокування спільного стану.
+            let slice = &left[..n];
+            if let Err(err) = shared.file.write_all_at(write_offset, slice) {
+                if let Ok(mut state) = shared.state.lock() {
+                    state.table.cancel_reservation(id, n as u64);
+                }
+                return Err(err.into());
+            }
+
+            {
+                let mut state = shared
+                    .state
+                    .lock()
+                    .map_err(|_| DownloadError::Internal("стан завантаження отруєно".into()))?;
+                state.table.commit_write(id, n as u64)?;
+            }
+
+            offset += n as u64;
+            left = &left[n..];
         }
 
         // Межу перечитуємо: `seg` вище зчитано до циклу, і за цей час хвіст

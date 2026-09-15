@@ -1,4 +1,5 @@
 using System;
+using System.Buffers;
 using System.Buffers.Binary;
 using System.IO;
 using System.Text;
@@ -48,11 +49,12 @@ public static class Frame
                 $"кадр завеликий: {body.Length} байтів при межі {MaxFrame}");
         }
 
-        byte[] header = new byte[4];
-        BinaryPrimitives.WriteUInt32LittleEndian(header, (uint)body.Length);
+        // Об'єднуємо заголовок і тіло в один буфер для єдиного системного виклику у named pipe.
+        byte[] packet = new byte[4 + body.Length];
+        BinaryPrimitives.WriteUInt32LittleEndian(packet.AsSpan(0, 4), (uint)body.Length);
+        body.CopyTo(packet.AsSpan(4));
 
-        await stream.WriteAsync(header, ct).ConfigureAwait(false);
-        await stream.WriteAsync(body, ct).ConfigureAwait(false);
+        await stream.WriteAsync(packet, ct).ConfigureAwait(false);
         await stream.FlushAsync(ct).ConfigureAwait(false);
     }
 
@@ -79,20 +81,26 @@ public static class Frame
             throw new IpcException($"кадр завеликий: {size} байтів при межі {MaxFrame}");
         }
 
-        byte[] body = new byte[size];
-        if (!await ReadExactAsync(stream, body, ct).ConfigureAwait(false))
-        {
-            // Обрізане тіло — те саме, що обірване з'єднання.
-            return null;
-        }
-
+        // Використовуємо пул пам'яті, щоб не навантажувати GC при частому читанні знімків.
+        byte[] rented = ArrayPool<byte>.Shared.Rent((int)size);
         try
         {
-            return JsonSerializer.Deserialize<T>(body, Json);
+            Memory<byte> memory = rented.AsMemory(0, (int)size);
+            if (!await ReadExactAsync(stream, memory, ct).ConfigureAwait(false))
+            {
+                // Обрізане тіло — те саме, що обірване з'єднання.
+                return null;
+            }
+
+            return JsonSerializer.Deserialize<T>(memory.Span, Json);
         }
         catch (JsonException e)
         {
             throw new IpcException($"кадр не є коректним JSON: {e.Message}", e);
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(rented);
         }
     }
 

@@ -163,6 +163,8 @@ pub struct Engine {
     after: Arc<AfterQueue>,
     /// Чи розклад дозволяв старт на попередньому тіку.
     вікно_було: std::sync::atomic::AtomicBool,
+    /// Поточний активний ліміт швидкості для динамічного оновлення модулів на льоту.
+    поточний_ліміт: std::sync::atomic::AtomicU64,
 }
 
 impl Engine {
@@ -204,6 +206,9 @@ impl Engine {
         }
 
         let вікно = stored.downloads_allowed(хвилини_зараз());
+        let початковий_ліміт = stored.effective_rate(хвилини_зараз());
+        registry.set_rate_limit(початковий_ліміт);
+
         let engine = Arc::new(Self {
             store: Mutex::new(store),
             live: Arc::new(Mutex::new(HashMap::new())),
@@ -214,6 +219,7 @@ impl Engine {
             налаштування: Mutex::new(stored),
             after: Arc::new(AfterQueue::default()),
             вікно_було: std::sync::atomic::AtomicBool::new(вікно),
+            поточний_ліміт: std::sync::atomic::AtomicU64::new(початковий_ліміт),
         });
 
         engine.відновити_з_бази()?;
@@ -329,6 +335,10 @@ impl Engine {
         if let Ok(mut g) = self.налаштування.lock() {
             *g = next.clone();
         }
+        let effective_rate = next.effective_rate(хвилини_зараз());
+        self.поточний_ліміт.store(effective_rate, Ordering::Relaxed);
+        self.registry.set_rate_limit(effective_rate);
+
         self.вікно_було
             .store(next.downloads_allowed(хвилини_зараз()), Ordering::Relaxed);
         self.clone().спробувати_наступне();
@@ -962,6 +972,16 @@ impl Engine {
                 if open && !was {
                     tracing::info!("розклад: вікно відкрилось, стартую чергу");
                     self.clone().спробувати_наступне();
+                }
+
+                let limit = self
+                    .налаштування
+                    .lock()
+                    .map(|s| s.effective_rate(хвилини_зараз()))
+                    .unwrap_or(0);
+                let prev_limit = self.поточний_ліміт.swap(limit, Ordering::Relaxed);
+                if limit != prev_limit {
+                    self.registry.set_rate_limit(limit);
                 }
 
                 // Нема кому слухати — нема чого й складати знімок.

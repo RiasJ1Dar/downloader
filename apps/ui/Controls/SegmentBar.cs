@@ -171,6 +171,9 @@ public sealed class SegmentBar : Control
     /// велика — і людина бачить «усе добре» там, де насправді сім потоків із
     /// восьми вже закінчили роботу.
     /// </remarks>
+    private static readonly IPen DarkBoundaryPen = new Pen(new SolidColorBrush(Color.FromArgb(0x66, 0xFF, 0xFF, 0xFF)), 1);
+    private static readonly IPen LightBoundaryPen = new Pen(new SolidColorBrush(Color.FromArgb(0x55, 0, 0, 0)), 1);
+
     private static void МалюватиМежі(
         DrawingContext context,
         Rect поле,
@@ -178,12 +181,7 @@ public sealed class SegmentBar : Control
         ulong total)
     {
         bool dark = Application.Current?.ActualThemeVariant == ThemeVariant.Dark;
-        var pen = new Pen(
-            new SolidColorBrush(
-                dark
-                    ? Color.FromArgb(0x66, 0xFF, 0xFF, 0xFF)
-                    : Color.FromArgb(0x55, 0, 0, 0)),
-            1);
+        IPen pen = dark ? DarkBoundaryPen : LightBoundaryPen;
 
         foreach (PartView part in parts)
         {
