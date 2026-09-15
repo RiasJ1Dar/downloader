@@ -236,17 +236,17 @@ impl Store {
     }
 
     fn tasks_where(&self, status: Option<Status>) -> Result<Vec<Task>> {
-        let sql = "SELECT id, url, protocol, status, title, category_id,
-                          created_at, updated_at, finished_at, error, variant
-                   FROM task";
-
         let mut out = Vec::new();
 
         match status {
             Some(s) => {
                 let mut stmt = self
                     .conn
-                    .prepare(&format!("{sql} WHERE status = ?1 ORDER BY id DESC"))
+                    .prepare_cached(
+                        "SELECT id, url, protocol, status, title, category_id,
+                                created_at, updated_at, finished_at, error, variant
+                         FROM task WHERE status = ?1 ORDER BY id DESC",
+                    )
                     .map_err(db)?;
                 let rows = stmt.query_map(params![s.as_str()], task_from_row).map_err(db)?;
                 for r in rows {
@@ -256,7 +256,11 @@ impl Store {
             None => {
                 let mut stmt = self
                     .conn
-                    .prepare(&format!("{sql} ORDER BY id DESC"))
+                    .prepare_cached(
+                        "SELECT id, url, protocol, status, title, category_id,
+                                created_at, updated_at, finished_at, error, variant
+                         FROM task ORDER BY id DESC",
+                    )
                     .map_err(db)?;
                 let rows = stmt.query_map([], task_from_row).map_err(db)?;
                 for r in rows {
@@ -307,7 +311,7 @@ impl Store {
     pub fn files(&self, task_id: TaskId) -> Result<Vec<FileRow>> {
         let mut stmt = self
             .conn
-            .prepare(
+            .prepare_cached(
                 "SELECT id, task_id, idx, path, size, fingerprint, selected, done, checksum
                  FROM file WHERE task_id = ?1 ORDER BY idx",
             )
@@ -371,19 +375,24 @@ impl Store {
         tx.execute("DELETE FROM segment WHERE file_id = ?1", params![file_id])
             .map_err(db)?;
 
-        for seg in table.segments() {
-            tx.execute(
-                "INSERT INTO segment (file_id, seg_id, start, end, done)
-                 VALUES (?1, ?2, ?3, ?4, ?5)",
-                params![
+        {
+            let mut stmt = tx
+                .prepare_cached(
+                    "INSERT INTO segment (file_id, seg_id, start, end, done)
+                     VALUES (?1, ?2, ?3, ?4, ?5)",
+                )
+                .map_err(db)?;
+
+            for seg in table.segments() {
+                stmt.execute(params![
                     file_id,
                     seg.id as i64,
                     seg.start as i64,
                     seg.end as i64,
                     seg.done as i64
-                ],
-            )
-            .map_err(db)?;
+                ])
+                .map_err(db)?;
+            }
         }
 
         tx.commit().map_err(db)?;
@@ -396,7 +405,7 @@ impl Store {
     pub fn load_segments(&self, file_id: FileId, total: u64) -> Result<Option<SegmentTable>> {
         let mut stmt = self
             .conn
-            .prepare(
+            .prepare_cached(
                 "SELECT seg_id, start, end, done FROM segment
                  WHERE file_id = ?1 ORDER BY start",
             )
@@ -450,7 +459,7 @@ impl Store {
     pub fn categories(&self) -> Result<Vec<Category>> {
         let mut stmt = self
             .conn
-            .prepare("SELECT id, name, folder, extensions FROM category ORDER BY name")
+            .prepare_cached("SELECT id, name, folder, extensions FROM category ORDER BY name")
             .map_err(db)?;
 
         let rows = stmt

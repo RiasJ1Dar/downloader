@@ -38,7 +38,7 @@ pub struct Allowance {
 /// ліміт налаштовано). Дешевий у копіюванні через `Arc`.
 #[derive(Debug)]
 pub struct RateLimiter {
-    bucket: Option<Mutex<Bucket>>,
+    bucket: Mutex<Option<Bucket>>,
 }
 
 #[derive(Debug)]
@@ -71,7 +71,7 @@ impl RateLimiter {
 
         let rate = bytes_per_sec as f64;
         Self {
-            bucket: Some(Mutex::new(Bucket {
+            bucket: Mutex::new(Some(Bucket {
                 // Стартуємо з повним відром: перший шматок має піти одразу,
                 // інакше кожне завантаження починалося б із паузи.
                 tokens: rate,
@@ -85,13 +85,49 @@ impl RateLimiter {
     /// Обмежувач, який нічого не обмежує.
     #[must_use]
     pub const fn unlimited() -> Self {
-        Self { bucket: None }
+        Self {
+            bucket: Mutex::new(None),
+        }
     }
 
     /// Чи ліміт узагалі діє.
     #[must_use]
-    pub const fn is_limited(&self) -> bool {
-        self.bucket.is_some()
+    pub fn is_limited(&self) -> bool {
+        self.bucket.lock().map(|b| b.is_some()).unwrap_or(false)
+    }
+
+    /// Змінити ліміт швидкості на льоту без перезапуску завантаження.
+    ///
+    /// Нуль вимикає обмеження.
+    pub fn set_limit(&self, bytes_per_sec: u64) {
+        let Ok(mut guard) = self.bucket.lock() else {
+            tracing::warn!("обмежувач швидкості отруєно при set_limit");
+            return;
+        };
+
+        if bytes_per_sec == 0 {
+            *guard = None;
+        } else {
+            let rate = bytes_per_sec as f64;
+            match guard.as_mut() {
+                Some(b) => {
+                    b.refill();
+                    b.capacity = rate;
+                    b.refill_per_sec = rate;
+                    if b.tokens > rate {
+                        b.tokens = rate;
+                    }
+                }
+                None => {
+                    *guard = Some(Bucket {
+                        tokens: rate,
+                        capacity: rate,
+                        refill_per_sec: rate,
+                        last: Instant::now(),
+                    });
+                }
+            }
+        }
     }
 
     /// Спитати дозволу на `want` байтів.
@@ -99,13 +135,6 @@ impl RateLimiter {
     /// Повертає, скільки можна взяти **зараз**. Якщо менше, ніж просили,
     /// у [`Allowance::wait`] буде пауза перед наступною спробою.
     pub fn take(&self, want: u64) -> Allowance {
-        let Some(bucket) = &self.bucket else {
-            return Allowance {
-                allowed: want,
-                wait: None,
-            };
-        };
-
         if want == 0 {
             return Allowance {
                 allowed: 0,
@@ -113,10 +142,17 @@ impl RateLimiter {
             };
         }
 
-        let Ok(mut b) = bucket.lock() else {
+        let Ok(mut guard) = self.bucket.lock() else {
             // Отруєний м'ютекс не привід зупиняти завантаження: гірше, що
             // станеться — ліміт на мить перестане діяти.
             tracing::warn!("обмежувач швидкості отруєно, пропускаю без ліміту");
+            return Allowance {
+                allowed: want,
+                wait: None,
+            };
+        };
+
+        let Some(b) = guard.as_mut() else {
             return Allowance {
                 allowed: want,
                 wait: None,
@@ -325,4 +361,18 @@ mod tests {
             "вісім потоків узяли {разом} за {минуло:.2} с — понад стелю {стеля}"
         );
     }
+
+    #[test]
+    fn динамічна_зміна_ліміту_працює_на_льоту() {
+        let r = RateLimiter::new(1000);
+        assert!(r.is_limited());
+        r.set_limit(0);
+        assert!(!r.is_limited());
+        assert_eq!(r.take(5000).allowed, 5000);
+
+        r.set_limit(2000);
+        assert!(r.is_limited());
+        assert_eq!(r.take(2000).allowed, 2000);
+    }
 }
+
