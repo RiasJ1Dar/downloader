@@ -165,4 +165,61 @@ mod tests {
         assert!(m.cookies.is_none());
         assert!(m.referer.is_none());
     }
+
+    #[tokio::test]
+    async fn читання_кадру_браузера_з_префіксом_довжини() {
+        let body = br#"{"url":"https://site.com/video.m3u8"}"#;
+        let len = (body.len() as u32).to_le_bytes();
+        let mut input = Vec::new();
+        input.extend_from_slice(&len);
+        input.extend_from_slice(body);
+
+        let mut cursor = std::io::Cursor::new(input);
+        let msg = читати_з_браузера(&mut cursor).await.unwrap();
+        assert_eq!(msg.url, "https://site.com/video.m3u8");
+        assert!(msg.cookies.is_none());
+    }
+
+    #[tokio::test]
+    async fn запис_кадру_браузера_з_префіксом_довжини() {
+        let resp = ToExt {
+            ok: true,
+            id: Some(42),
+            error: None,
+        };
+        let mut out = Vec::new();
+        писати_в_браузер(&mut out, &resp).await.unwrap();
+
+        assert!(out.len() >= 4);
+        let len = u32::from_le_bytes(out[..4].try_into().unwrap()) as usize;
+        assert_eq!(out.len() - 4, len);
+        let parsed: serde_json::Value = serde_json::from_slice(&out[4..]).unwrap();
+        assert_eq!(parsed["ok"], true);
+        assert_eq!(parsed["id"], 42);
+    }
+
+    #[tokio::test]
+    async fn відхилення_нульового_або_завеликого_кадру() {
+        // Нульовий кадр
+        let mut zero_len = std::io::Cursor::new(0u32.to_le_bytes());
+        let err = читати_з_браузера(&mut zero_len).await.unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+
+        // Завеликий кадр (> 1 МБ)
+        let mut big_len = std::io::Cursor::new((2 * 1024 * 1024u32).to_le_bytes());
+        let err2 = читати_з_браузера(&mut big_len).await.unwrap_err();
+        assert_eq!(err2.kind(), std::io::ErrorKind::InvalidData);
+    }
+
+    #[tokio::test]
+    async fn обробка_некоректної_url_повертає_помилку() {
+        let msg = FromExt {
+            url: "ftp://files.example/a.zip".to_string(),
+            cookies: None,
+            referer: None,
+        };
+        let res = обробити(msg).await;
+        assert!(!res.ok);
+        assert!(res.error.unwrap().contains("не http(s)"));
+    }
 }

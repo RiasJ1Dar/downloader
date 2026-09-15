@@ -275,18 +275,19 @@ impl DashProtocol {
 }
 
 /// Representation з готовими абсолютними URL сегментів (init першим).
-struct Якість {
-    name: String,
-    bandwidth: u64,
+#[derive(Debug, Clone)]
+pub struct Якість {
+    pub name: String,
+    pub bandwidth: u64,
     /// Висота кадру, якщо MPD її називає. Потрібна переліку якостей.
-    height: Option<u64>,
+    pub height: Option<u64>,
     /// Це доріжка звуку, а не відео.
     ///
     /// ⚠️ DASH роздає їх окремими Representation, і без цієї ознаки звук
     /// опинявся в переліку якостей нарівні з відео — людина обирала «0.1
     /// Мбіт/с» і отримувала файл без зображення.
-    звук: bool,
-    сегменти: Vec<String>,
+    pub звук: bool,
+    pub сегменти: Vec<String>,
 }
 
 /// Чи URL схожий на DASH-маніфест: шлях містить `.mpd`.
@@ -296,7 +297,7 @@ pub fn схожий_на_dash(source: &str) -> bool {
     path.to_ascii_lowercase().contains(".mpd")
 }
 
-fn розібрати_mpd(xml: &str, source: &str) -> Result<Vec<Якість>> {
+pub fn розібрати_mpd(xml: &str, source: &str) -> Result<Vec<Якість>> {
     if xml_схоже_на_drm(xml) {
         return Err(Error::Store(
             "DASH захищено DRM — не обходимо".to_owned(),
@@ -510,7 +511,7 @@ fn тривалість(p: &Period, mpd: &dash_mpd::MPD) -> Option<f64> {
 ///   лише розгорнути повтори;
 /// * `duration` з `timescale` — сегменти однакової довжини, і їхню кількість
 ///   доводиться виводити з тривалості періоду.
-fn сегменти_шаблону(
+pub fn сегменти_шаблону(
     t: &SegmentTemplate,
     rep: &Representation,
     base: &str,
@@ -632,7 +633,7 @@ fn решта_періоду(
 ///
 /// Ширина поля (`Number%05d`) трапляється часто: сервери люблять вирівняні
 /// імена на кшталт `seg-00042.m4s`.
-fn підставити(
+pub fn підставити(
     шаблон: &str,
     id: &str,
     bandwidth: u64,
@@ -754,7 +755,7 @@ fn це_звук(adaptation: &AdaptationSet, rep: &Representation) -> bool {
 /// ⚠️ Ідентифікатор — те саме ім'я, яким модуль назве файл (`720p.mp4`).
 /// Одна річ має одну назву: інакше довелося б тримати ще одну відповідність
 /// «якість ↔ файл» і стежити, щоб вона не розійшлася.
-fn варіанти(якості: &[Якість]) -> Vec<Variant> {
+pub fn варіанти(якості: &[Якість]) -> Vec<Variant> {
     якості
         .iter()
         .rev()

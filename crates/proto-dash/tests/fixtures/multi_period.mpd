@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<MPD xmlns="urn:mpeg:dash:schema:mpd:2011"
+     profiles="urn:mpeg:dash:profile:isoff-live:2011"
+     type="static"
+     minBufferTime="PT2S">
+  <Period id="p1" duration="PT8S">
+    <AdaptationSet id="0" contentType="video" mimeType="video/mp4" width="1280" height="720">
+      <SegmentTemplate timescale="1" duration="4" startNumber="1" media="p1-$Number$.m4s" />
+      <Representation id="v720_p1" bandwidth="2000000" />
+    </AdaptationSet>
+  </Period>
+  <Period id="p2" duration="PT12S">
+    <AdaptationSet id="0" contentType="video" mimeType="video/mp4" width="1280" height="720">
+      <SegmentTemplate timescale="1" duration="4" startNumber="1" media="p2-$Number$.m4s" />
+      <Representation id="v720_p2" bandwidth="2100000" />
+    </AdaptationSet>
+    <AdaptationSet id="1" contentType="video" mimeType="video/mp4" width="1920" height="1080">
+      <SegmentTemplate timescale="1" duration="4" startNumber="1" media="p2-1080-$Number$.m4s" />
+      <Representation id="v1080_p2" bandwidth="4000000" />
+    </AdaptationSet>
+  </Period>
+</MPD>

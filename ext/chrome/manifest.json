@@ -5,9 +5,25 @@
   "version": "0.1.0",
   "description": "__MSG_extDesc__",
   "minimum_chrome_version": "116",
-  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAzyCsWZOlvUpOdoEpW8OYHxkURl4m4CDPMPpt/xIBpg87vZOL6PinVQP3Q7zMLP1tr2GqRU79L/WmyKnzf7F9tzZf39QksYR58a1yH4PExMzXsDc/zK+xLNDZN26j06UbW/yUJ2T2eOzodjEg5KzrMwTzOqeheGO3W5XK6WPE/IQL+kcL10PisY4XwN+jWKjQOC1gHDPv2UR87ipwCTjlQc+bf6ZQW3+htv6QcQ1HGuc6Zwrt9AB5VtAglCuN5kFgQlTw3qiLoLvzfua26hpFrs1A6QVaI9cWyAzRHQh6pN9eFbkLQNLN9VGcYfDaflhGqRqdP+n0pBlj5PEE14YR+wIDAQAB",
-  "permissions": ["downloads", "nativeMessaging", "cookies", "webRequest", "contextMenus"],
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEArPClQzkhoRuoobLxcgo5jY36ZigicFZE55ERf9auMwH1Cz8tugxSQpe0Qzyv/wRNLL2v/UYfRIeVHaZpb+z9LMn0k5S4i9od6N8RMalIRhmUNVMWVojzID9lBVb7InWJ7Vv1DOSmMimGwbNsCJnA/qJO/v+AII9IBPK13DOBWaH3CgkU8Lpc/3F0rz8g+vKhofW97903YEHW5eqUtvGmN1R8o9t5b5bLXiiOQYk7JTEt8VaQTuRducs8pSSwFdmdZeO0UTn2Y3d9EXISbYDO+RppxSSkfaurpSuwj10kL7jjz/SBsEiojHFeLaJL1AkBSh9jDVXT6e9cnWcqlgAoewIDAQAB",
+  "permissions": [
+    "downloads",
+    "nativeMessaging",
+    "cookies",
+    "declarativeNetRequest",
+    "webRequest",
+    "contextMenus"
+  ],
   "host_permissions": ["http://*/*", "https://*/*"],
+  "declarative_net_request": {
+    "rule_resources": [
+      {
+        "id": "ruleset_1",
+        "enabled": true,
+        "path": "rules.json"
+      }
+    ]
+  },
   "background": {
     "service_worker": "background.js"
   },

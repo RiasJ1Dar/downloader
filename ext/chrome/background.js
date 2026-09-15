@@ -32,25 +32,48 @@ function withCookies(url, referer, extraUrl) {
 
 const lastManifest = new Map();
 
-chrome.webRequest.onCompleted.addListener(
-  (d) => {
-    const u = d.url || "";
-    if (!/\.m3u8(\?|$)/i.test(u) && !/\.mpd(\?|$)/i.test(u)) return;
-    if (d.tabId >= 0) lastManifest.set(d.tabId, u);
-  },
-  { urls: ["http://*/*", "https://*/*"] }
-);
+// 1. Пасивний мережевий спостерігач для маніфестів (ловить fetch, XHR і web workers)
+function recordManifest(d) {
+  const u = d.url || "";
+  if (!/\.m3u8(\?|$)/i.test(u) && !/\.mpd(\?|$)/i.test(u)) return;
+  if (d.tabId >= 0) lastManifest.set(d.tabId, u);
+}
 
+if (chrome.webRequest && chrome.webRequest.onBeforeRequest) {
+  chrome.webRequest.onBeforeRequest.addListener(
+    recordManifest,
+    { urls: ["http://*/*", "https://*/*"] }
+  );
+} else if (chrome.webRequest && chrome.webRequest.onCompleted) {
+  chrome.webRequest.onCompleted.addListener(
+    recordManifest,
+    { urls: ["http://*/*", "https://*/*"] }
+  );
+}
+
+// 2. Очищення кешу при закритті вкладки
+chrome.tabs.onRemoved.addListener((tabId) => {
+  lastManifest.delete(tabId);
+});
+
+// 3. Обробка повідомлень від сніффера та кнопки над відео
 chrome.runtime.onMessage.addListener((msg, sender) => {
-  if (!msg || msg.op !== "add") return;
+  if (!msg) return;
   const tabId = sender.tab && sender.tab.id;
+
+  if (msg.op === "manifest_detected" && msg.url && tabId >= 0) {
+    lastManifest.set(tabId, msg.url);
+    return;
+  }
+
+  if (msg.op !== "add") return;
   const manifest = tabId >= 0 ? lastManifest.get(tabId) : undefined;
   const target = manifest || msg.media || msg.page;
   if (!target) return;
   withCookies(msg.page || target, msg.page, target);
 });
 
-
+// 4. Контекстні меню
 chrome.runtime.onInstalled.addListener(() => {
   chrome.contextMenus.removeAll(() => {
     chrome.contextMenus.create({
@@ -80,6 +103,7 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
   withCookies(page || target, page, target);
 });
 
+// 5. Перехоплення завантажень: downloads.onCreated -> cancel -> native messaging
 chrome.downloads.onCreated.addListener((item) => {
   const url = item.url || "";
   if (!url.startsWith("http://") && !url.startsWith("https://")) return;
