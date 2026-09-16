@@ -42,7 +42,13 @@ Installs **per user**, into `%LOCALAPPDATA%\Programs\Downloader`, with no UAC
 prompt and no service. The window ships .NET inside — no runtime to deliver.
 
 ⚠️ The packages are **not signed**: there is no code-signing certificate, so
-SmartScreen will warn on first run.
+SmartScreen will warn on first run. Instead, every release ships a
+`SHA256SUMS.txt`, and the packages themselves are built in public CI from this
+same source — so anyone can rebuild them and check the sums:
+
+```
+sha256sum -c SHA256SUMS.txt
+```
 
 ### Why ffmpeg is needed
 
