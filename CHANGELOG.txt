@@ -1,4 +1,4 @@
-﻿# Журнал змін проєкту Downloader
+# Журнал змін проєкту Downloader
 
 Усі помітні зміни у проєкті Downloader документуються у цьому файлі.
 Формат базується на Keep a Changelog (https://keepachangelog.com/),
