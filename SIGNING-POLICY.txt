@@ -1,0 +1,197 @@
+ПОЛІТИКА ПІДПИСУ КОДУ · CODE SIGNING POLICY
+===========================================
+
+Downloader — менеджер завантажень для Windows.
+https://github.com/RiasJ1Dar/downloader
+
+
+1. ХТО ВІДПОВІДАЄ ЗА ПІДПИС
+
+Проєкт веде одна людина: Віктор Гартунг (GitHub: RiasJ1Dar).
+
+    Author    — Віктор Гартунг. Пише код і має право змінювати репозиторій.
+    Reviewer  — Віктор Гартунг. Перевіряє внески сторонніх осіб.
+    Approver  — Віктор Гартунг. Ухвалює рішення про випуск і підпис.
+
+Команда, що підписує, і команда, що розробляє, — та сама. Стороннього коду
+в релізі без перегляду не буває: усі внески проходять через pull request і
+угоду контриб'ютора (https://github.com/RiasJ1Dar/.github/blob/main/CLA.md).
+
+Доступ до облікового запису GitHub захищено двофакторною автентифікацією.
+
+
+2. ЩО ПІДПИСУЄТЬСЯ
+
+Інсталятори Windows, зібрані в публічному CI з публічного коду:
+
+    Downloader-X.Y.Z-web.msi
+    Downloader-X.Y.Z-full.msi
+
+Збірка описана у .github/workflows/release.yml і packaging/zibraty.ps1.
+Вручну зібрані пакети не підписуються й не поширюються.
+
+До кожного випуску додається SHA256SUMS.txt. Він лишається й після появи
+підпису: підпис доводить походження, суми — цілісність, і одне не заміняє
+іншого.
+
+
+3. ПРИВАТНІСТЬ
+
+Програма не збирає, не зберігає й нікуди не передає даних про користувача.
+Телеметрії немає. Облікових записів немає. Реклами немає.
+
+Сама, без прямої команди, програма в мережу не ходить. Усі звернення —
+наслідок дії людини:
+
+    завантаження        адреси, які людина додала в чергу, і нічого крім;
+    dl ffmpeg-install   github.com/BtbN/FFmpeg-Builds — LGPL-збірка ffmpeg;
+    dl ytdlp-update     запускає yt-dlp -U, той оновлює себе сам;
+    dl update --check   raw.githubusercontent.com/RiasJ1Dar/downloader —
+                        читає packaging/update.json, порівнює версії й ДРУКУЄ
+                        результат. Нічого не завантажує і не встановлює.
+
+Тихе автооновлення в програмі заборонене навмисно: спроба запустити
+`dl update` без --check завершується відмовою з поясненням.
+
+Стан завдань і налаштування лежать локально: %LOCALAPPDATA%\Downloader,
+а в портативному режимі (файл portable.txt поруч із програмою) — у теці
+самої програми.
+
+Куки й заголовки, які людина передає для приватних джерел, використовуються
+лише для того завдання й не записуються в журнал: у текстах помилок адреси
+й токени обрізаються.
+
+
+4. ВИДАЛЕННЯ
+
+Пакет ставиться для користувача, без адміністраторських прав і без служби.
+Видалення прибирає теку програми, обидва ярлики, запис у PATH і ключ реєстру.
+
+
+5. ЧОГО В ПРОГРАМІ НЕМАЄ
+
+Downloader не містить засобів пошуку чи використання вразливостей, не обходить
+технічних засобів захисту й не має прихованих можливостей. Захищені DRM
+потоки програма не завантажує: модуль відмовляє одразу й каже чому.
+
+
+6. ПОДЯКА І ПОТОЧНИЙ СТАН
+
+⚠️ Станом на 16.09.2026 випуски НЕ ПІДПИСАНІ: заявку до SignPath Foundation
+ще не подано. Цей документ складено як вимогу їхньої програми й описує те,
+як підпис буде влаштовано. Поки підпису немає, Windows SmartScreen
+попереджатиме при першому запуску, а єдиний спосіб перевірити пакет —
+SHA256SUMS.txt і повторна збірка з коду.
+
+Після схвалення: сертифікат підпису коду надано безкоштовно фондом SignPath
+Foundation (https://signpath.org) у межах його програми для проєктів з
+відкритим кодом. Цей абзац замінить попередження вище, а не додасться до
+нього.
+
+
+7. ЯК ПОВІДОМИТИ ПРО ПРОБЛЕМУ
+
+Звичайна помилка — issue в репозиторії. Вразливість — приватно, через
+Security advisory GitHub, не в публічному issue.
+
+
+===========================================
+CODE SIGNING POLICY (English)
+===========================================
+
+Downloader — a download manager for Windows.
+https://github.com/RiasJ1Dar/downloader
+
+
+1. WHO IS RESPONSIBLE FOR SIGNING
+
+The project is maintained by one person: Viktor Hartunh (GitHub: RiasJ1Dar).
+
+    Author    — Viktor Hartunh. Writes code, may change the repository.
+    Reviewer  — Viktor Hartunh. Reviews third-party contributions.
+    Approver  — Viktor Hartunh. Decides on releases and signing.
+
+The team responsible for signing is the team responsible for development.
+No third-party code reaches a release unreviewed: contributions go through
+pull requests and the Contributor Agreement
+(https://github.com/RiasJ1Dar/.github/blob/main/CLA.md).
+
+The GitHub account is protected with two-factor authentication.
+
+
+2. WHAT IS SIGNED
+
+Windows installers built in public CI from public source:
+
+    Downloader-X.Y.Z-web.msi
+    Downloader-X.Y.Z-full.msi
+
+The build is defined in .github/workflows/release.yml and
+packaging/zibraty.ps1. Locally built packages are neither signed nor
+distributed.
+
+Every release also ships SHA256SUMS.txt, and will keep doing so after signing
+is in place: a signature proves origin, checksums prove integrity, and
+neither replaces the other.
+
+
+3. PRIVACY
+
+The program collects no user data, stores none, and transmits none. There is
+no telemetry, no account, no advertising.
+
+It never reaches the network on its own. Every request follows from an action
+by the user:
+
+    downloads          only the addresses the user queued, nothing else;
+    dl ffmpeg-install  github.com/BtbN/FFmpeg-Builds — the LGPL ffmpeg build;
+    dl ytdlp-update    runs yt-dlp -U, which updates itself;
+    dl update --check  raw.githubusercontent.com/RiasJ1Dar/downloader —
+                       reads packaging/update.json, compares versions and
+                       PRINTS the result. It downloads and installs nothing.
+
+Silent auto-update is deliberately refused: running `dl update` without
+--check stops with an explanation instead of updating.
+
+Task state and settings are stored locally in %LOCALAPPDATA%\Downloader, or,
+in portable mode (a portable.txt file next to the program), in the program's
+own folder.
+
+Cookies and headers supplied by the user for private sources are used for
+that task only and never written to logs: error messages redact addresses and
+tokens.
+
+
+4. UNINSTALLATION
+
+The package installs per user, without administrator rights and without a
+service. Uninstalling removes the program folder, both shortcuts, the PATH
+entry and the registry key.
+
+
+5. WHAT THE PROGRAM DOES NOT CONTAIN
+
+Downloader contains no tools for identifying or exploiting security
+vulnerabilities, circumvents no technical protection measures, and has no
+hidden functionality. DRM-protected streams are not downloaded: the module
+refuses immediately and says why.
+
+
+6. ACKNOWLEDGEMENT AND CURRENT STATUS
+
+⚠️ As of 2026-09-16 releases are NOT SIGNED: no application has been filed
+with the SignPath Foundation yet. This document exists because their
+programme requires it, and it describes how signing will work. Until then,
+Windows SmartScreen will warn on first run, and the only way to verify a
+package is SHA256SUMS.txt plus a rebuild from source.
+
+Once accepted: the code signing certificate is provided free of charge by the
+SignPath Foundation (https://signpath.org) under its programme for
+open-source projects. That paragraph will replace the warning above rather
+than be added next to it.
+
+
+7. REPORTING PROBLEMS
+
+Ordinary bugs: open an issue. Security vulnerabilities: report privately
+through GitHub Security advisories, not in a public issue.
