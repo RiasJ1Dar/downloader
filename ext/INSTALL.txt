@@ -1,78 +1,105 @@
 ================================================================================
-             ІНСТРУКЦІЯ З ПІДКЛЮЧЕННЯ БРАУЗЕРНОГО РОЗШИРЕННЯ DOWNLOADER
+        ПІДКЛЮЧЕННЯ БРАУЗЕРНОГО РОЗШИРЕННЯ DOWNLOADER
 ================================================================================
 
-Розширення забезпечує:
-1. Автоматичне перехоплення завантажень файлів (downloads.onCreated + cancel)
-   з передачею посилань, cookies та referer до ядра Downloader.
-2. Виявлення HLS (.m3u8) та DASH (.mpd) медіа-потоків на сторінках (через
-   declarativeNetRequest, PerformanceObserver та кнопку «Завантажити» над відео).
-3. Передачу завдань через Chrome Native Messaging до downloader-nmhost,
-   який з'єднується з ядром через named pipe (без локальних відкритих TCP-портів).
+Що робить розширення:
 
-Фіксований Extension ID: pionjhjgjaehkcpkidlblhonbejfdcdj
+1. перехоплює завантаження (downloads.onCreated + cancel) і передає ядру
+   адресу разом із cookies та referer;
+2. знаходить потоки HLS (.m3u8) і DASH (.mpd) на сторінці — через
+   webRequest і PerformanceObserver — і малює кнопку «Завантажити» над відео;
+3. передає завдання через native messaging у downloader-nmhost, а той
+   говорить із ядром через named pipe. Локального TCP-порту немає навмисно:
+   порт на 127.0.0.1 відкритий будь-якій програмі на машині.
 
---------------------------------------------------------------------------------
-КРОК 1. Збірка та реєстрація Native Messaging Host (downloader-nmhost)
---------------------------------------------------------------------------------
-1. Зберіть виконуваний файл nmhost:
-     cargo build -p downloader-nmhost
+Ідентифікатори розширення:
 
-2. Запустіть встановлення маніфесту в систему:
-     target\debug\downloader-nmhost.exe --install
-
-   Це автоматично:
-   - Створить маніфест com.downloader.host.json у:
-     %LOCALAPPDATA%\Downloader\nm\com.downloader.host.json
-   - Пропише шлях у реєстрі Windows для Chrome та Edge:
-     HKCU\Software\Google\Chrome\NativeMessagingHosts\com.downloader.host
-     HKCU\Software\Microsoft\Edge\NativeMessagingHosts\com.downloader.host
+    Chromium (розпаковане)  pionjhjgjaehkcpkidlblhonbejfdcdj
+    Firefox                 downloader@riasj1dar.github.io
 
 --------------------------------------------------------------------------------
-КРОК 2. Встановлення розширення у Google Chrome / Microsoft Edge
+КРОК 1. Зареєструвати native messaging host
 --------------------------------------------------------------------------------
 
-Варіант А. Режим розробника (рекомендовано для тестування та налагодження):
-1. Відкрийте браузер і перейдіть за адресою:
-     chrome://extensions  (для Chrome)
-     edge://extensions    (для Edge)
-2. Увімкніть перемикач «Режим розробника» (Developer mode) у верхньому правому кутку.
-3. Натисніть кнопку «Завантажити розпаковане розширення» (Load unpacked).
-4. Оберіть теку:
-     D:\Downloader\ext\chrome
-5. Переконайтеся, що ідентифікатор розширення:
-     pionjhjgjaehkcpkidlblhonbejfdcdj
+    cargo build -p downloader-nmhost
+    target\debug\downloader-nmhost.exe --install
 
-Варіант Б. Автоматизована збірка .crx (для дистрибуції та корпоративних політик):
-1. Запустіть скрипт збірки CRX:
-     powershell -ExecutionPolicy Bypass -File D:\Downloader\ext\build-crx.ps1
-2. Буде створено файл D:\Downloader\ext\downloader.crx, підписаний стабільним ключем.
-   Зверніть увагу: Chrome починаючи з версії 67 блокує прямий drag-and-drop сторонніх
-   CRX-файлів з помилкою «CRX_REQUIRED_PROOF_MISSING». Для щоденної роботи та
-   налагодження використовуйте Варіант А (розпаковане розширення). Для встановлення CRX
-   на робочих станціях використовується групова політика ExtensionInstallForcelist
-   або публікація у Chrome Web Store.
+Створює маніфест у %LOCALAPPDATA%\Downloader\nm\com.downloader.host.json і
+прописує шлях до нього:
+
+    HKCU\Software\Google\Chrome\NativeMessagingHosts\com.downloader.host
+    HKCU\Software\Chromium\...
+    HKCU\Software\Microsoft\Edge\...
+    HKCU\Software\BraveSoftware\Brave-Browser\...
+    HKCU\Software\Vivaldi\...
+    HKCU\Software\Opera Software\Opera Stable\...
+    %APPDATA%\Mozilla\NativeMessagingHosts\com.downloader.host.json
+
+⚠️ Кожен браузер читає СВОЮ гілку. Запис для Chrome не бачать ні Brave, ні
+Vivaldi — тому пишемо в усі відомі одразу, навіть якщо браузера ще немає.
+
+Розширення з магазину має інший ідентифікатор, ніж розпаковане. Щоб хост його
+приймав, додайте ID при встановленні:
+
+    downloader-nmhost.exe --install --allow-extension <ID з магазину>
+
+Прапорець можна вказати кілька разів. ID з символом «@» іде у список Firefox,
+решта — у список Chromium.
 
 --------------------------------------------------------------------------------
-КРОК 3. Перевірка роботи на живому сайті
+КРОК 2. Поставити розширення
 --------------------------------------------------------------------------------
-1. Запустіть ядро Downloader:
-     cargo run -p downloader-core-service
-   (або запустіть графічний застосунок / CLI).
 
-2. Перевірка завантаження файлу:
-   - Клікніть на будь-яке пряме посилання на завантаження (.zip, .iso, .exe, .mp4).
-   - Chrome скасує внутрішнє завантаження.
-   - Завдання негайно з'явиться в Downloader з правильними cookies та referer.
+Варіант А — розпакована тека (працює завжди, потрібен для розробки):
 
-3. Перевірка перехоплення відеопотоку:
-   - Відкрийте сторінку з відеоплеєром (наприклад, HLS/DASH або HTML5 відео).
-   - У правому нижньому кутку плеєра з'явиться кнопка «Завантажити».
-   - Натискання кнопки передає потік до ядра Downloader.
+  Chrome     chrome://extensions
+  Edge       edge://extensions
+  Brave      brave://extensions
+  Vivaldi    vivaldi://extensions
+  Firefox    about:debugging#/runtime/this-firefox
 
-4. Перевірка логів native host у браузері:
-   - На сторінці chrome://extensions натисніть «Фоновий режим: background.js»
-     у картці Downloader, щоб відкрити DevTools фонового процесу.
-   - При кожному кліку або завантаженні у консолі виводиться статус зв'язку
-     з native host («Downloader завдання <ID>»).
+  1. Увімкнути «Режим розробника» (у Firefox — «Тимчасово завантажити
+     додаток»).
+  2. «Завантажити розпаковане розширення» → тека ext\chrome
+     (у Firefox вибрати файл ext\chrome\manifest.json).
+  3. Звірити ідентифікатор із наведеним вище.
+
+  ⚠️ У Chromium розпаковане розширення живе до перезапуску браузера без
+  попереджень, але щоразу показує банер «Вимкніть розширення в режимі
+  розробника». У Firefox тимчасовий додаток зникає після закриття браузера.
+
+Варіант Б — файл .crx: НЕ ПРАЦЮЄ.
+
+  Chrome з версії 67 відхиляє сторонні CRX із диска
+  («CRX_REQUIRED_PROOF_MISSING»), і те саме роблять Edge, Brave і Vivaldi.
+  Файл можна поставити лише через корпоративну політику
+  (ExtensionInstallForcelist) або з магазину. Для щоденної роботи —
+  варіант А, для роздачі людям — магазин.
+
+Варіант В — магазин (основний шлях для користувачів):
+
+  Firefox Add-ons  безкоштовно, AMO підписує пакет, ідентифікатор наш власний
+  Chrome Web Store $5 одноразово, ідентифікатор призначає магазин — після
+                   публікації додати його через --allow-extension (крок 1)
+
+--------------------------------------------------------------------------------
+КРОК 3. Перевірити на живому сайті
+--------------------------------------------------------------------------------
+
+1. Запустити ядро:
+
+       cargo run -p downloader-core-service
+
+2. Завантаження файлу: натиснути пряме посилання (.zip, .iso, .mp4).
+   Браузер скасує власне завантаження, завдання з'явиться в Downloader
+   із cookies і referer.
+
+3. Потік: відкрити сторінку з відео. Над плеєром з'явиться кнопка
+   «Завантажити».
+
+4. Якщо нічого не відбувається — відкрити службову сторінку розширень,
+   натиснути «service worker» (Chromium) або «Інспектувати» (Firefox) у
+   картці Downloader і подивитися консоль. Повідомлення «Specified native
+   messaging host not found» означає крок 1: або хост не зареєстровано, або
+   ідентифікатор розширення не збігається зі списком у маніфесті.
 ================================================================================

@@ -40,10 +40,24 @@ async fn main() -> Result<()> {
         .with_env_filter("warn")
         .init();
 
-    if std::env::args().any(|a| a == "--install") {
+    let args: Vec<String> = std::env::args().collect();
+    if args.iter().any(|a| a == "--install") {
         let exe = std::env::current_exe().context("current_exe")?;
-        let path = install::install(&exe)?;
+        // Ідентифікатор розширення в Chrome Web Store призначає магазин, і
+        // наперед він невідомий. Без цього ключа кожна публікація вимагала б
+        // перезбірки програми: ID зашитий у код, а хост відхиляє все, чого в
+        // списку немає — з боку людини це виглядає як «розширення не
+        // працює», без жодної підказки чому.
+        let додаткові: Vec<String> = args
+            .windows(2)
+            .filter(|w| w[0] == "--allow-extension")
+            .map(|w| w[1].clone())
+            .collect();
+        let path = install::install_with(&exe, &додаткові)?;
         eprintln!("native host поставлено: {}", path.display());
+        if !додаткові.is_empty() {
+            eprintln!("додатково дозволено розширень: {}", додаткові.len());
+        }
         return Ok(());
     }
 
