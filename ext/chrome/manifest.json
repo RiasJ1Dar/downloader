@@ -6,26 +6,41 @@
   "description": "__MSG_extDesc__",
   "minimum_chrome_version": "116",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEArPClQzkhoRuoobLxcgo5jY36ZigicFZE55ERf9auMwH1Cz8tugxSQpe0Qzyv/wRNLL2v/UYfRIeVHaZpb+z9LMn0k5S4i9od6N8RMalIRhmUNVMWVojzID9lBVb7InWJ7Vv1DOSmMimGwbNsCJnA/qJO/v+AII9IBPK13DOBWaH3CgkU8Lpc/3F0rz8g+vKhofW97903YEHW5eqUtvGmN1R8o9t5b5bLXiiOQYk7JTEt8VaQTuRducs8pSSwFdmdZeO0UTn2Y3d9EXISbYDO+RppxSSkfaurpSuwj10kL7jjz/SBsEiojHFeLaJL1AkBSh9jDVXT6e9cnWcqlgAoewIDAQAB",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "downloader@riasj1dar.github.io",
+      "strict_min_version": "140.0",
+      "data_collection_permissions": {
+        "required": ["none"]
+      }
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "action": {
+    "default_title": "__MSG_extName__",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
   "permissions": [
     "downloads",
     "nativeMessaging",
     "cookies",
-    "declarativeNetRequest",
     "webRequest",
     "contextMenus"
   ],
   "host_permissions": ["http://*/*", "https://*/*"],
-  "declarative_net_request": {
-    "rule_resources": [
-      {
-        "id": "ruleset_1",
-        "enabled": true,
-        "path": "rules.json"
-      }
-    ]
-  },
   "background": {
-    "service_worker": "background.js"
+    "service_worker": "background.js",
+    "scripts": ["background.js"]
   },
   "content_scripts": [
     {
