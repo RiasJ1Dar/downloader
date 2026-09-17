@@ -14,7 +14,19 @@ use crate::HOST_NAME;
 /// Стабільний ID unpacked-розширення (з `key` у manifest.json).
 pub const EXTENSION_ID: &str = "pionjhjgjaehkcpkidlblhonbejfdcdj";
 
+/// Ідентифікатор розширення у Firefox.
+///
+/// Firefox не знає `chrome-extension://…` і звіряє відправника за полем
+/// `allowed_extensions`. Теку для маніфеста ми прописували із самого початку,
+/// а це поле — ні, тож у Firefox хост мовчки відмовляв би кожному
+/// підключенню: тека є, дозволу немає.
+pub const FIREFOX_EXTENSION_ID: &str = "downloader@riasj1dar.github.io";
+
 /// JSON маніфесту native host.
+///
+/// Обидва списки лежать в одному файлі навмисно: Chrome читає
+/// `allowed_origins` і не зважає на `allowed_extensions`, Firefox — навпаки.
+/// Два окремі файли розійшлися б при першій же зміні шляху до програми.
 #[must_use]
 pub fn host_manifest_json(exe: &Path) -> String {
     let exe = exe.display().to_string().replace('\\', "\\\\");
@@ -26,6 +38,9 @@ pub fn host_manifest_json(exe: &Path) -> String {
   "type": "stdio",
   "allowed_origins": [
     "chrome-extension://{EXTENSION_ID}/"
+  ],
+  "allowed_extensions": [
+    "{FIREFOX_EXTENSION_ID}"
   ]
 }}
 "#
@@ -98,6 +113,12 @@ fn прописати_firefox(manifest: &Path) -> io::Result<()> {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::expect_used,
+    clippy::unwrap_used,
+    clippy::panic,
+    reason = "у тестах падіння і є повідомленням про помилку"
+)]
 mod tests {
     use super::*;
 
@@ -108,6 +129,41 @@ mod tests {
         assert!(j.contains("stdio"));
         assert!(j.contains("downloader-nmhost.exe"));
         assert!(j.contains(HOST_NAME));
+    }
+
+    /// Один маніфест обслуговує обидва сімейства браузерів.
+    ///
+    /// Без `allowed_extensions` Firefox відхиляє підключення, і симптом
+    /// оманливий: тека маніфеста на місці, файл читається, а розширення
+    /// бачить лише «host not found» — так ніби програму не встановлено.
+    #[test]
+    fn маніфест_дозволяє_і_chrome_і_firefox() {
+        let j = host_manifest_json(Path::new(r"C:\dl\downloader-nmhost.exe"));
+        // Розбираємо JSON, а не шукаємо підрядок: `contains("allowed_extensions")`
+        // знаходить сам себе всередині будь-якого схожого імені поля, і тест
+        // лишається зеленим на зламаному маніфесті. Перевірено: перейменування
+        // поля таку перевірку не валить, а цю — валить.
+        let parsed: serde_json::Value =
+            serde_json::from_str(&j).expect("маніфест має бути валідним JSON");
+        assert_eq!(parsed["type"], "stdio");
+
+        let chrome = parsed["allowed_origins"]
+            .as_array()
+            .expect("allowed_origins має бути масивом");
+        assert!(
+            chrome
+                .iter()
+                .any(|v| v == &format!("chrome-extension://{EXTENSION_ID}/")),
+            "немає дозволу для Chrome: {j}"
+        );
+
+        let firefox = parsed["allowed_extensions"]
+            .as_array()
+            .expect("allowed_extensions має бути масивом");
+        assert!(
+            firefox.iter().any(|v| v == FIREFOX_EXTENSION_ID),
+            "немає дозволу для Firefox: {j}"
+        );
     }
 
     #[test]

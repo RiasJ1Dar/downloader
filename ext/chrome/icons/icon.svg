@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <rect width="128" height="128" rx="26" fill="#0d1520"/>
+  <!-- стрілка вниз: те, що робить програма -->
+  <path d="M64 24 v46" stroke="#4ade80" stroke-width="13" stroke-linecap="round"/>
+  <path d="M40 58 L64 84 L88 58" fill="none" stroke="#4ade80" stroke-width="13"
+        stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- смужка сегментів: по ній видно, що качається частинами -->
+  <rect x="24" y="97" width="80" height="12" rx="6" fill="#1e2b3a"/>
+  <rect x="24" y="97" width="26" height="12" rx="6" fill="#4ade80"/>
+  <rect x="56" y="97" width="16" height="12" rx="6" fill="#4ade80"/>
+  <rect x="78" y="97" width="10" height="12" rx="6" fill="#4ade80"/>
+</svg>
