@@ -27,8 +27,14 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 
-[target.'cfg(windows)'.dependencies]
+# Трей на Windows / Linux / macOS. На Linux потрібні системні пакети:
+# libgtk-3, libayatana-appindicator3 (або libappindicator3), pkg-config.
+# Без DISPLAY трей тихо не піднімається — IPC лишається.
+[target.'cfg(any(windows, unix))'.dependencies]
 tray-icon = "0.21"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+gtk = { version = "0.18", default-features = false }
 
 [dev-dependencies]
 downloader-testserver.workspace = true

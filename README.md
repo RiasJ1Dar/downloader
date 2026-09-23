@@ -2,8 +2,9 @@
 
 # Downloader
 
-Менеджер завантажень для Windows: сегментоване качання з докачуванням,
-HLS/DASH, YouTube. Аналог IDM та Ant Download Manager.
+Менеджер завантажень для Windows (і експериментально Linux/macOS):
+сегментоване качання з докачуванням, HLS/DASH, YouTube. Аналог IDM та
+Ant Download Manager.
 
 ![Архітектура](docs/architecture.png)
 
@@ -88,26 +89,43 @@ cargo clippy --workspace --all-targets
 
 ### Linux / macOS (experimental)
 
-Ядро (`downloader-core`) і CLI (`dl`) збираються й працюють на Linux і macOS:
-IPC — unix-сокет у `$XDG_RUNTIME_DIR` / Application Support (не world-writable
-`/tmp`), теки даних — XDG / Application Support, післядії — systemctl / pmset.
+Повний стек (ядро + CLI + трей + Avalonia UI + nmhost) збирається на Linux і
+macOS. MSI/WiX лишаються Windows-only; підписаних `.deb` / `.dmg` ще немає.
 
-Пакування (`.msi` / WiX), вікно Avalonia й трей лишаються Windows-first.
-`downloader-nmhost --install` на Linux/macOS експериментально прописує
-маніфест у стандартні теки `NativeMessagingHosts` (Chrome, Chromium, Edge,
-Brave, Vivaldi, Firefox); `--uninstall` прибирає їх.
+- **IPC:** `$XDG_RUNTIME_DIR/downloader/core.sock` (Linux) або
+  `$HOME/Library/Application Support/Downloader/core.sock` (macOS) — не
+  world-writable `/tmp/downloader-core.sock`.
+- **Трей:** потрібна desktop-сесія. На Linux — `libgtk-3` +
+  `libayatana-appindicator3` (або `libappindicator3`). Без `DISPLAY` ядро
+  лише попереджає і далі обслуговує IPC (`cargo test` з `--pipe` трей
+  пропускає).
+- **nmhost:** `--install` / `--uninstall` → стандартні `NativeMessagingHosts`
+  (Chrome, Chromium, Edge, Brave, Vivaldi, Firefox).
 
-```
-cargo build -p downloader-cli -p downloader-core-service -p downloader-nmhost
-./target/debug/downloader-core
-./target/debug/dl add https://example.com/file.zip
-./target/debug/downloader-nmhost --install
-```
-
-Вікно (потрібен .NET 10 SDK):
+Збірка й запуск:
 
 ```
-dotnet build -c Release apps/ui
+# Rust 1.90+
+cargo build --release -p downloader-cli -p downloader-core-service -p downloader-nmhost
+
+# UI (.NET 10 SDK)
+dotnet publish -c Release apps/ui
+
+# поставити в ~/.local/share/Downloader (+ .desktop, nmhost)
+./packaging/install-unix.sh --user
+
+# або вручну:
+./target/release/downloader-core &          # трей + IPC
+./target/release/dl add https://example.com/file.zip
+dotnet run --project apps/ui -c Release    # або опублікований Downloader.Ui
+./target/release/downloader-nmhost --install
+./target/release/dl ffmpeg-install         # для YouTube / DASH
+```
+
+Залежності збірки трею (Debian/Ubuntu):
+
+```
+sudo apt install libgtk-3-dev libxdo-dev libayatana-appindicator3-dev pkg-config
 ```
 
 Інсталятори (потрібен WiX 6 — `dotnet tool install --global wix`):

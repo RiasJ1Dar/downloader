@@ -2,8 +2,9 @@
 
 # Downloader
 
-A download manager for Windows: segmented downloading with resume, HLS/DASH,
-YouTube. In the vein of IDM and Ant Download Manager.
+A download manager for Windows (and experimentally Linux/macOS): segmented
+downloading with resume, HLS/DASH, YouTube. In the vein of IDM and Ant
+Download Manager.
 
 ![Architecture](docs/architecture.en.png)
 
@@ -91,27 +92,42 @@ cargo clippy --workspace --all-targets
 
 ### Linux / macOS (experimental)
 
-The core (`downloader-core`) and CLI (`dl`) build and run on Linux and macOS:
-IPC uses a unix socket under `$XDG_RUNTIME_DIR` / Application Support (not a
-world-writable `/tmp` path), data dirs follow XDG / Application Support, and
-post-actions use systemctl / pmset.
+The full stack (core + CLI + tray + Avalonia UI + nmhost) builds on Linux and
+macOS. MSI/WiX stay Windows-only; signed `.deb` / `.dmg` are not there yet.
 
-Packaging (`.msi` / WiX), the Avalonia window and the tray stay Windows-first.
-`downloader-nmhost --install` on Linux/macOS experimentally registers the
-manifest under the standard `NativeMessagingHosts` directories (Chrome,
-Chromium, Edge, Brave, Vivaldi, Firefox); `--uninstall` removes them.
+- **IPC:** `$XDG_RUNTIME_DIR/downloader/core.sock` (Linux) or
+  `$HOME/Library/Application Support/Downloader/core.sock` (macOS) — not a
+  world-writable `/tmp/downloader-core.sock`.
+- **Tray:** needs a desktop session. On Linux: `libgtk-3` +
+  `libayatana-appindicator3` (or `libappindicator3`). Without `DISPLAY` the
+  core warns and still serves IPC (`cargo test` with `--pipe` skips the tray).
+- **nmhost:** `--install` / `--uninstall` → standard `NativeMessagingHosts`
+  (Chrome, Chromium, Edge, Brave, Vivaldi, Firefox).
 
-```
-cargo build -p downloader-cli -p downloader-core-service -p downloader-nmhost
-./target/debug/downloader-core
-./target/debug/dl add https://example.com/file.zip
-./target/debug/downloader-nmhost --install
-```
-
-The window (.NET 10 SDK required):
+Build and run:
 
 ```
-dotnet build -c Release apps/ui
+# Rust 1.90+
+cargo build --release -p downloader-cli -p downloader-core-service -p downloader-nmhost
+
+# UI (.NET 10 SDK)
+dotnet publish -c Release apps/ui
+
+# install into ~/.local/share/Downloader (+ .desktop, nmhost)
+./packaging/install-unix.sh --user
+
+# or by hand:
+./target/release/downloader-core &          # tray + IPC
+./target/release/dl add https://example.com/file.zip
+dotnet run --project apps/ui -c Release    # or published Downloader.Ui
+./target/release/downloader-nmhost --install
+./target/release/dl ffmpeg-install         # for YouTube / DASH
+```
+
+Tray build deps (Debian/Ubuntu):
+
+```
+sudo apt install libgtk-3-dev libxdo-dev libayatana-appindicator3-dev pkg-config
 ```
 
 Installers (WiX 6 required — `dotnet tool install --global wix`):

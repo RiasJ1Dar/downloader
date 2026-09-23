@@ -760,6 +760,7 @@ dependencies = [
  "downloader-proto-ytdlp",
  "downloader-testserver",
  "downloader-winutil",
+ "gtk",
  "hex",
  "reqwest",
  "sha2",

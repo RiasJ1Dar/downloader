@@ -21,11 +21,123 @@ public static class Wire
     /// <summary>Версія протоколу. Мусить збігатися з ядром.</summary>
     public const uint ProtocolVersion = 1;
 
-    /// <summary>Ім'я каналу, на якому слухає ядро.</summary>
-    public static string PipeName =>
-        System.OperatingSystem.IsWindows()
-            ? "downloader-core"
-            : "/tmp/downloader-core.sock";
+    /// <summary>
+    /// Типовий шлях/ім'я каналу ядра для цієї ОС.
+    /// </summary>
+    /// <remarks>
+    /// ⚠️ Мусить збігатися з <c>default_ipc_endpoint()</c> у
+    /// <c>crates/ipc/src/protocol.rs</c>. Міняєш Rust — міняй і тут.
+    ///
+    /// <list type="bullet">
+    /// <item>Windows: named pipe <c>downloader-core</c> (без <c>\\.\pipe\</c> —
+    ///   його додає <see cref="System.IO.Pipes.NamedPipeClientStream"/>).</item>
+    /// <item>Linux: <c>$XDG_RUNTIME_DIR/downloader/core.sock</c>, інакше
+    ///   <c>/tmp/downloader-$UID/core.sock</c>.</item>
+    /// <item>macOS: <c>$HOME/Library/Application Support/Downloader/core.sock</c>,
+    ///   інакше <c>$TMPDIR/downloader-$UID/core.sock</c>.</item>
+    /// </list>
+    /// </remarks>
+    public static string PipeName => DefaultIpcEndpoint();
+
+    /// <summary>Дзеркало Rust <c>default_ipc_endpoint()</c>.</summary>
+    public static string DefaultIpcEndpoint()
+    {
+        if (System.OperatingSystem.IsWindows())
+        {
+            return "downloader-core";
+        }
+
+        if (System.OperatingSystem.IsLinux())
+        {
+            string? runtime = System.Environment.GetEnvironmentVariable("XDG_RUNTIME_DIR");
+            if (!string.IsNullOrEmpty(runtime))
+            {
+                return System.IO.Path.Combine(runtime, "downloader", "core.sock");
+            }
+
+            return $"/tmp/downloader-{CurrentUid()}/core.sock";
+        }
+
+        if (System.OperatingSystem.IsMacOS())
+        {
+            string? home = System.Environment.GetEnvironmentVariable("HOME");
+            if (!string.IsNullOrEmpty(home))
+            {
+                return System.IO.Path.Combine(
+                    home, "Library", "Application Support", "Downloader", "core.sock");
+            }
+
+            string tmp = System.Environment.GetEnvironmentVariable("TMPDIR") ?? "/tmp";
+            tmp = tmp.TrimEnd('/');
+            return $"{tmp}/downloader-{CurrentUid()}/core.sock";
+        }
+
+        return $"/tmp/downloader-{CurrentUid()}/core.sock";
+    }
+
+    /// <summary>UID користувача — як у Rust <c>current_uid()</c>.</summary>
+    private static uint CurrentUid()
+    {
+        string? uidEnv = System.Environment.GetEnvironmentVariable("UID");
+        if (uint.TryParse(uidEnv, out uint fromEnv))
+        {
+            return fromEnv;
+        }
+
+        if (System.OperatingSystem.IsLinux())
+        {
+            try
+            {
+                foreach (string line in System.IO.File.ReadLines("/proc/self/status"))
+                {
+                    if (!line.StartsWith("Uid:", System.StringComparison.Ordinal))
+                    {
+                        continue;
+                    }
+
+                    string[] parts = line.Split(
+                        (char[]?)null,
+                        System.StringSplitOptions.RemoveEmptyEntries);
+                    if (parts.Length >= 2 && uint.TryParse(parts[1], out uint fromProc))
+                    {
+                        return fromProc;
+                    }
+                }
+            }
+            catch (System.Exception)
+            {
+                // далі — id(1)
+            }
+        }
+
+        try
+        {
+            var psi = new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = "id",
+                Arguments = "-u",
+                RedirectStandardOutput = true,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+            };
+            using System.Diagnostics.Process? p = System.Diagnostics.Process.Start(psi);
+            if (p is not null)
+            {
+                string s = p.StandardOutput.ReadToEnd().Trim();
+                p.WaitForExit(2000);
+                if (uint.TryParse(s, out uint fromId))
+                {
+                    return fromId;
+                }
+            }
+        }
+        catch (System.Exception)
+        {
+            // запасний 0
+        }
+
+        return 0;
+    }
 }
 
 // ── Запити ──────────────────────────────────────────────────────────────

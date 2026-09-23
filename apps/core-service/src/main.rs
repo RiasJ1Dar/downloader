@@ -16,11 +16,9 @@ mod after;
 mod clipboard_watch;
 mod engine;
 mod server;
-#[cfg(windows)]
 mod tray;
 
 use std::path::PathBuf;
-#[cfg(windows)]
 use std::sync::Arc;
 
 use anyhow::Context;
@@ -148,7 +146,9 @@ async fn main() -> anyhow::Result<()> {
         "ядро запущено"
     );
 
-    #[cfg(windows)]
+    // Трей потрібен лише в «звичайному» запуску. Тести з `--pipe` його
+    // пропускають (немає DISPLAY у CI — і так не треба). Якщо трей не
+    // піднявся (headless / немає libayatana), ядро все одно обслуговує IPC.
     let mut з_трею = if ставити_nmhost {
         match tray::старт(Arc::clone(&engine), downloads.clone()) {
             Ok(rx) => Some(rx),
@@ -167,18 +167,21 @@ async fn main() -> anyhow::Result<()> {
             tracing::info!("отримано сигнал зупинки, ядро завершується");
         }
         _ = async {
-            #[cfg(windows)]
             if let Some(rx) = з_трею.as_mut() {
-                while !*rx.borrow() {
-                    if rx.changed().await.is_err() {
+                loop {
+                    if *rx.borrow() {
+                        // Явний «Вийти» з меню трею.
                         break;
+                    }
+                    if rx.changed().await.is_err() {
+                        // Потік трею впав (немає DISPLAY / GTK) — ядро лишається.
+                        tracing::warn!("потік трею завершився; IPC працює далі");
+                        std::future::pending::<()>().await;
                     }
                 }
             } else {
                 std::future::pending::<()>().await;
             }
-            #[cfg(not(windows))]
-            std::future::pending::<()>().await;
         } => {
             tracing::info!("вихід з меню трею");
         }

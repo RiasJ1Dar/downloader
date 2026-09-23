@@ -42,6 +42,14 @@ fn цикл(
     tx: watch::Sender<bool>,
     rt: tokio::runtime::Handle,
 ) -> anyhow::Result<()> {
+    // Linux: GTK треба ініціалізувати в тому ж потоці, що крутить чергу подій.
+    // Без DISPLAY (CI / headless) init падає — викликач лише попереджає в
+    // журналі; `main` не трактує падіння потоку як «Вийти».
+    #[cfg(target_os = "linux")]
+    {
+        gtk::init().map_err(|e| anyhow::anyhow!("gtk init (трей): {e}"))?;
+    }
+
     let вікно = MenuItem::with_id("window", t("tray-window"), true, None);
     let відкрити = MenuItem::with_id("open", t("tray-open"), true, None);
     let буфер = MenuItem::with_id("clip", t("tray-clip"), true, None);
@@ -64,6 +72,14 @@ fn цикл(
     let _tray_rx = TrayIconEvent::receiver();
 
     loop {
+        // Прокачати GTK, інакше кліки по меню на Linux не дійдуть до каналу.
+        #[cfg(target_os = "linux")]
+        {
+            while gtk::events_pending() {
+                gtk::main_iteration_do(false);
+            }
+        }
+
         if let Ok(ev) = menu_rx.try_recv() {
             let id = ev.id.0.as_str();
             match id {
@@ -116,13 +132,15 @@ fn відкрити_вікно() {
         }
     });
     if r.is_none() {
-        tracing::warn!("немає Downloader.Ui.exe поруч із ядром");
+        tracing::warn!("немає Downloader.Ui поруч із ядром");
     }
 }
 
 fn відкрити_теку(dir: &std::path::Path) {
     let r = if cfg!(windows) {
         std::process::Command::new("explorer").arg(dir).spawn()
+    } else if cfg!(target_os = "macos") {
+        std::process::Command::new("open").arg(dir).spawn()
     } else {
         std::process::Command::new("xdg-open").arg(dir).spawn()
     };
