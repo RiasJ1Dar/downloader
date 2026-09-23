@@ -144,6 +144,7 @@ pub fn expected_sha256(path: &str) -> Result<String> {
     let total = match s.as_slice() {
         ["plain", size]
         | ["norange", size]
+        | ["fakerange", size]
         | ["changing", size]
         | ["gzip", size]
         | ["auth", size]
