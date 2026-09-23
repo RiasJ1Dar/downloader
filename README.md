@@ -92,7 +92,7 @@ cargo clippy --workspace --all-targets
 Повний стек (ядро + CLI + трей + Avalonia UI + nmhost) збирається на Linux і
 macOS. MSI/WiX лишаються Windows-only.
 
-**Готовий prerelease:** теґ [`v0.1.1-unix`](https://github.com/RiasJ1Dar/downloader/releases/tag/v0.1.1-unix)
+**Готовий prerelease:** теґ [`v0.1.2-unix`](https://github.com/RiasJ1Dar/downloader/releases/tag/v0.1.2-unix)
 (Assets: `Downloader-0.1.0-linux-x64.tar.gz` / `.deb`, `Downloader-0.1.0-macos-arm64.tar.gz`,
 `Downloader-0.1.0-macos-x64.tar.gz`). Пакети **не підписані** і **не notarized** —
 Gatekeeper на macOS попередить при першому запуску. AppImage / `.dmg` у цьому

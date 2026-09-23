@@ -16,7 +16,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-VERSION="${VERSION:-0.1.1}"
+VERSION="${VERSION:-0.1.2}"
 SKIP_UI="${SKIP_UI:-0}"
 SKIP_CARGO="${SKIP_CARGO:-0}"
 

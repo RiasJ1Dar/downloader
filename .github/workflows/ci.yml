@@ -26,3 +26,19 @@ jobs:
         run: cargo test --workspace
       - name: clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Unix binary smoke (-V / --help)
+        if: runner.os != 'Windows'
+        run: |
+          set -euo pipefail
+          cargo build -p downloader-cli -p downloader-core-service -p downloader-nmhost
+          ./target/debug/dl -V
+          ./target/debug/downloader-core -V
+          # Soft-timeout for nmhost --help (hang regression guard).
+          ./target/debug/downloader-nmhost --help >/dev/null &
+          pid=$!
+          ( sleep 5; kill -TERM "$pid" 2>/dev/null ) &
+          w=$!
+          wait "$pid"
+          kill "$w" 2>/dev/null || true
+          wait "$w" 2>/dev/null || true

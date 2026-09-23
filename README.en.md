@@ -95,7 +95,7 @@ cargo clippy --workspace --all-targets
 The full stack (core + CLI + tray + Avalonia UI + nmhost) builds on Linux and
 macOS. MSI/WiX stay Windows-only.
 
-**Prerelease builds:** tag [`v0.1.1-unix`](https://github.com/RiasJ1Dar/downloader/releases/tag/v0.1.1-unix)
+**Prerelease builds:** tag [`v0.1.2-unix`](https://github.com/RiasJ1Dar/downloader/releases/tag/v0.1.2-unix)
 (assets: `Downloader-0.1.0-linux-x64.tar.gz` / `.deb`, `Downloader-0.1.0-macos-arm64.tar.gz`,
 `Downloader-0.1.0-macos-x64.tar.gz`). Packages are **unsigned** and **not notarized** —
 Gatekeeper on macOS will warn on first launch. No AppImage / `.dmg` in this cut.

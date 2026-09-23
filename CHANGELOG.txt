@@ -4,6 +4,12 @@
 Формат базується на Keep a Changelog (https://keepachangelog.com/),
 і проєкт дотримується Semantic Versioning (https://semver.org/).
 
+## [0.1.2] - 2026-09-24
+
+### Added (Unix, tag v0.1.2-unix)
+- CI smoke (no GUI) after Unix release builds on Linux and macOS: `downloader-core`/`dl`/`downloader-nmhost` `-V`/`--help`, brief core start with temp `--db`/`--downloads`, `dl list` over default IPC, then SIGINT. Fails the job before artifact upload if smoke fails.
+- Lightweight Unix binary smoke step in `ci.yml` (non-Windows matrix): build cli/core/nmhost and run `-V` / nmhost `--help`.
+
 ## [0.1.1] - 2026-09-24
 
 ### Fixed (Unix, tag v0.1.1-unix)

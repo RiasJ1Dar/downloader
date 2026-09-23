@@ -13,13 +13,13 @@ on:
       version:
         description: 'Version without v prefix (e.g. 0.1.0) — tag will be v{version}-unix if creating release'
         required: false
-        default: '0.1.1'
+        default: '0.1.2'
 
 permissions:
   contents: write
 
 env:
-  VERSION: '0.1.1'
+  VERSION: '0.1.2'
 
 jobs:
   build-linux:
@@ -38,7 +38,7 @@ jobs:
             VER="${TAG#v}"
             VER="${VER%-unix}"
           else
-            VER="${{ inputs.version || '0.1.1' }}"
+            VER="${{ inputs.version || '0.1.2' }}"
           fi
           echo "version=$VER" >> "$GITHUB_OUTPUT"
           echo "Using VERSION=$VER"
@@ -67,6 +67,12 @@ jobs:
           ./packaging/build-deb.sh
           ls -lh target/unix/
 
+
+      - name: Smoke (Linux binaries, no GUI)
+        run: |
+          set -euo pipefail
+          ./packaging/ci-smoke-unix.sh "$PWD/target/release"
+
       - name: Upload Linux artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -93,7 +99,7 @@ jobs:
             VER="${TAG#v}"
             VER="${VER%-unix}"
           else
-            VER="${{ inputs.version || '0.1.1' }}"
+            VER="${{ inputs.version || '0.1.2' }}"
           fi
           echo "version=$VER" >> "$GITHUB_OUTPUT"
           echo "Using VERSION=$VER"
@@ -175,6 +181,35 @@ jobs:
           (cd "$OUT" && shasum -a 256 "$TARBALL_NAME" > "${TARBALL_NAME}.sha256")
           ls -lh "$OUT/$TARBALL_NAME"*
 
+
+      - name: Smoke (macOS arm64 native binaries, no GUI)
+        run: |
+          set -euo pipefail
+          ./packaging/ci-smoke-unix.sh "$PWD/target/release"
+
+      - name: Smoke (macOS x64 cross binaries — version/help only)
+        run: |
+          set -euo pipefail
+          REL="$PWD/target/x86_64-apple-darwin/release"
+          # Rosetta may be required on arm64 runners; skip (warn) if unexecutable.
+          if ! "$REL/dl" -V >/dev/null 2>&1; then
+            echo "WARN: cannot execute x64 binaries on this runner — skipping x64 smoke"
+            file "$REL/dl" || true
+            exit 0
+          fi
+          "$REL/downloader-core" -V
+          "$REL/downloader-core" -h >/dev/null
+          "$REL/dl" -V
+          "$REL/dl" -h >/dev/null
+          # Soft-timeout: nmhost --help must not hang (no gtimeout on macOS).
+          "$REL/downloader-nmhost" --help >/dev/null &
+          pid=$!
+          ( sleep 5; kill -TERM "$pid" 2>/dev/null ) &
+          w=$!
+          wait "$pid"
+          kill "$w" 2>/dev/null || true
+          wait "$w" 2>/dev/null || true
+
       - name: Upload macOS artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -202,7 +237,7 @@ jobs:
             VER="${TAG#v}"
             VER="${VER%-unix}"
           else
-            VER="${{ inputs.version || '0.1.1' }}"
+            VER="${{ inputs.version || '0.1.2' }}"
             TAG="v${VER}-unix"
           fi
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
