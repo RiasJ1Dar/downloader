@@ -1,12 +1,11 @@
-//! Текст із буфера обміну Windows.
+//! Текст із буфера обміну.
 //!
 //! Потрібен для `dl add --clipboard`: людина скопіювала посилання, ми його
-//! читаємо. Формат один — `CF_UNICODETEXT`. Картинка, список файлів чи
-//! порожній буфер — це не URL, і мовчки підставляти порожній рядок тут
-//! означало б «додати нічого» без сліду.
+//! читаємо. На Windows — `CF_UNICODETEXT` через `clipboard-win`; на інших ОС —
+//! `arboard`. Картинка, список файлів чи порожній буфер — це не URL, і мовчки
+//! підставляти порожній рядок тут означало б «додати нічого» без сліду.
 //!
-//! WinAPI ховає `clipboard-win` (BSL-1.0, як MIT за дозволом). У цьому
-//! крейті `unsafe` лишається забороненим.
+//! У цьому крейті `unsafe` лишається забороненим.
 
 /// Помилки читання буфера обміну.
 ///
@@ -26,8 +25,8 @@ pub enum ClipboardError {
     /// Буфер відкритий, формат є, але прочитати байти не вийшло.
     #[error("не вдалося прочитати текст з буфера обміну: {0}")]
     Read(String),
-    /// На Linux/macOS буфера Windows немає — чесна відмова, не заглушка Ok.
-    #[error("буфер обміну доступний лише на Windows")]
+    /// Немає робочого буфера на цій ОС (немає дисплея / ще не зібрано підтримку).
+    #[error("буфер обміну / --clipboard ще не підтримується на цій ОС")]
     Unsupported,
 }
 
@@ -84,7 +83,23 @@ fn текст_буфера_на_цій_системі() -> Result<String, Clipbo
 
 #[cfg(not(windows))]
 fn текст_буфера_на_цій_системі() -> Result<String, ClipboardError> {
-    Err(ClipboardError::Unsupported)
+    let mut clipboard = arboard::Clipboard::new().map_err(|e| {
+        // Без дисплея (SSH, CI) arboard не відкриється — чесна відмова.
+        let msg = e.to_string();
+        if msg.to_lowercase().contains("display")
+            || msg.to_lowercase().contains("wayland")
+            || msg.to_lowercase().contains("x11")
+        {
+            ClipboardError::Unsupported
+        } else {
+            ClipboardError::Open(msg)
+        }
+    })?;
+    match clipboard.get_text() {
+        Ok(text) => прийняти_текст(&text),
+        Err(arboard::Error::ContentNotAvailable) => Err(помилка_без_тексту(None)),
+        Err(e) => Err(ClipboardError::Read(e.to_string())),
+    }
 }
 
 #[cfg(test)]
@@ -155,7 +170,7 @@ mod tests {
         );
         assert_eq!(
             ClipboardError::Unsupported.to_string(),
-            "буфер обміну доступний лише на Windows"
+            "буфер обміну / --clipboard ще не підтримується на цій ОС"
         );
     }
 }

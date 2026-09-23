@@ -1,7 +1,8 @@
 //! Післядії черги: сон і вимкнення ПК.
 //!
 //! Викликає ядро, не вікно: закритий клієнт не має скасовувати «вимкнути
-//! після черги». На не-Windows це чесна відмова, не заглушка «ніби вимкнули».
+//! після черги». На Linux/macOS — best-effort через systemctl/pmset/shutdown;
+//! на інших ОС — чесна відмова, не заглушка «ніби вимкнули».
 
 use std::io;
 use std::process::Command;
@@ -9,8 +10,8 @@ use std::process::Command;
 /// Помилка післядії.
 #[derive(Debug, thiserror::Error)]
 pub enum PowerError {
-    /// Ця ОС не вміє сон/вимкнення з ядра.
-    #[error("післядія доступна лише на Windows")]
+    /// Ця ОС не вміє сон/вимкнення з ядра (або немає потрібних утиліт).
+    #[error("післядія (сон/вимкнення) недоступна на цій ОС")]
     Unsupported,
     /// Системна команда не запустилась або повернула помилку.
     #[error("не вдалося виконати післядію: {0}")]
@@ -76,14 +77,56 @@ fn shutdown_os() -> Result<(), PowerError> {
     check(status)
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "linux")]
+fn sleep_os() -> Result<(), PowerError> {
+    // systemctl — типовий шлях на systemd; loginctl — запасний (також systemd).
+    if try_status("systemctl", &["suspend"]).is_ok() {
+        return Ok(());
+    }
+    try_status("loginctl", &["suspend"])
+}
+
+#[cfg(target_os = "linux")]
+fn shutdown_os() -> Result<(), PowerError> {
+    if try_status("systemctl", &["poweroff"]).is_ok() {
+        return Ok(());
+    }
+    try_status("shutdown", &["-h", "now"])
+}
+
+#[cfg(target_os = "macos")]
+fn sleep_os() -> Result<(), PowerError> {
+    try_status("pmset", &["sleepnow"])
+}
+
+#[cfg(target_os = "macos")]
+fn shutdown_os() -> Result<(), PowerError> {
+    // osascript питає GUI-підтвердження рідше за сирий shutdown у сесії користувача.
+    if try_status(
+        "osascript",
+        &["-e", "tell application \"System Events\" to shut down"],
+    )
+    .is_ok()
+    {
+        return Ok(());
+    }
+    try_status("shutdown", &["-h", "now"])
+}
+
+#[cfg(all(not(windows), not(target_os = "linux"), not(target_os = "macos")))]
 fn sleep_os() -> Result<(), PowerError> {
     Err(PowerError::Unsupported)
 }
 
-#[cfg(not(windows))]
+#[cfg(all(not(windows), not(target_os = "linux"), not(target_os = "macos")))]
 fn shutdown_os() -> Result<(), PowerError> {
     Err(PowerError::Unsupported)
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn try_status(program: &str, args: &[&str]) -> Result<(), PowerError> {
+    let status = Command::new(program).args(args).status()?;
+    check(status)
 }
 
 fn check(status: std::process::ExitStatus) -> Result<(), PowerError> {

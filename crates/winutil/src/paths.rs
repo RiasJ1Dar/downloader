@@ -3,6 +3,7 @@
 use std::path::{Path, PathBuf};
 
 /// Межа старого API Windows.
+#[cfg(windows)]
 const MAX_PATH: usize = 260;
 
 /// Дати шляху форму, яку Windows прийме навіть коли він довгий.
@@ -116,7 +117,7 @@ pub fn portable_marker_dir() -> Option<PathBuf> {
 
 /// Визначити теку даних програми:
 /// - Якщо передано шлях до exe (або знайдено поточний exe) і поруч є `portable.txt` → тека бінарника.
-/// - Інакше → `%LOCALAPPDATA%\Downloader` (на Windows) або `$HOME/.local/share/Downloader`.
+/// - Інакше → [`default_data_dir`].
 #[must_use]
 pub fn data_dir_for_exe(exe: Option<&Path>) -> PathBuf {
     if let Some(exe_path) = exe
@@ -138,15 +139,51 @@ pub fn app_data_dir() -> PathBuf {
     data_dir_for_exe(std::env::current_exe().ok().as_deref())
 }
 
-/// Типова тека даних без портативного режиму (`%LOCALAPPDATA%\Downloader`).
+/// Типова тека даних без портативного режиму.
+///
+/// * Windows: `%LOCALAPPDATA%\Downloader`
+/// * Linux: `$XDG_DATA_HOME/downloader` або `$HOME/.local/share/Downloader`
+/// * macOS: `$HOME/Library/Application Support/Downloader`
 #[must_use]
 pub fn default_data_dir() -> PathBuf {
-    std::env::var_os("LOCALAPPDATA")
-        .or_else(|| std::env::var_os("HOME"))
-        .map_or_else(
-            || PathBuf::from("."),
-            |base| PathBuf::from(base).join("Downloader"),
-        )
+    default_data_dir_os()
+}
+
+#[cfg(windows)]
+fn default_data_dir_os() -> PathBuf {
+    std::env::var_os("LOCALAPPDATA").map_or_else(
+        || PathBuf::from("."),
+        |base| PathBuf::from(base).join("Downloader"),
+    )
+}
+
+#[cfg(target_os = "linux")]
+fn default_data_dir_os() -> PathBuf {
+    if let Some(xdg) = std::env::var_os("XDG_DATA_HOME")
+        && !xdg.is_empty()
+    {
+        return PathBuf::from(xdg).join("downloader");
+    }
+    std::env::var_os("HOME").map_or_else(
+        || PathBuf::from("."),
+        |home| PathBuf::from(home).join(".local/share/Downloader"),
+    )
+}
+
+#[cfg(target_os = "macos")]
+fn default_data_dir_os() -> PathBuf {
+    std::env::var_os("HOME").map_or_else(
+        || PathBuf::from("."),
+        |home| PathBuf::from(home).join("Library/Application Support/Downloader"),
+    )
+}
+
+#[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
+fn default_data_dir_os() -> PathBuf {
+    std::env::var_os("HOME").map_or_else(
+        || PathBuf::from("."),
+        |home| PathBuf::from(home).join(".local/share/Downloader"),
+    )
 }
 
 /// Типова тека завантажень:
@@ -303,6 +340,40 @@ mod tests {
         let out = long_path(Path::new(&p)).display().to_string();
 
         assert_eq!(out.matches("\\\\?\\").count(), 1, "{out}");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn типова_тека_даних_на_windows_з_localappdata() {
+        // Функція читає середовище процесу; перевіряємо форму шляху.
+        let got = default_data_dir();
+        assert!(
+            got.ends_with("Downloader"),
+            "очікували …\\Downloader, маємо {}",
+            got.display()
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn типова_тека_даних_на_linux_xdg_або_home() {
+        let got = default_data_dir();
+        let s = got.display().to_string();
+        assert!(
+            s.ends_with("/downloader") || s.ends_with("/.local/share/Downloader"),
+            "очікували XDG downloader або ~/.local/share/Downloader, маємо {s}"
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn типова_тека_даних_на_macos_application_support() {
+        let got = default_data_dir();
+        assert!(
+            got.ends_with("Library/Application Support/Downloader"),
+            "очікували Application Support/Downloader, маємо {}",
+            got.display()
+        );
     }
 
     #[test]

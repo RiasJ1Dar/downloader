@@ -47,7 +47,7 @@ mod tests {
 
     #[test]
     fn версія_ядра_не_порожня() {
-        assert!(!VERSION.is_empty());
+        assert_ne!(VERSION, "", "версія ядра не має бути порожньою");
     }
 
     #[test]

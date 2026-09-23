@@ -586,17 +586,54 @@ public sealed partial class MainViewModel : ObservableObject
 
         try
         {
-            Process.Start(new ProcessStartInfo
-            {
-                FileName = "explorer.exe",
-                Arguments = $"/select,\"{dest}\"",
-                UseShellExecute = true,
-            });
+            OpenInFileManager(dest);
         }
         catch (Exception e)
         {
             Status = Каталог.T("ui-open-failed", ("message", e.Message));
         }
+    }
+
+    /// <summary>
+    /// Відкрити теку з файлом у системному файловому менеджері.
+    /// </summary>
+    /// <remarks>
+    /// Windows: <c>explorer /select,"path"</c>. macOS: <c>open -R path</c>.
+    /// Linux: <c>xdg-open</c> батьківської теки (виділення файлу нестандартне).
+    /// </remarks>
+    private static void OpenInFileManager(string path)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = "explorer.exe",
+                Arguments = $"/select,\"{path}\"",
+                UseShellExecute = true,
+            });
+            return;
+        }
+
+        if (OperatingSystem.IsMacOS())
+        {
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = "open",
+                ArgumentList = { "-R", path },
+                UseShellExecute = false,
+            });
+            return;
+        }
+
+        // Linux та інші Unix: відкрити батьківську теку.
+        string? parent = System.IO.Path.GetDirectoryName(path);
+        string dir = string.IsNullOrEmpty(parent) ? path : parent;
+        Process.Start(new ProcessStartInfo
+        {
+            FileName = "xdg-open",
+            ArgumentList = { dir },
+            UseShellExecute = false,
+        });
     }
 
     [RelayCommand]

@@ -110,7 +110,7 @@ pub fn default_manifest_path() -> Result<PathBuf> {
     Ok(manifest_path_for(std::env::current_exe().ok().as_deref()))
 }
 
-/// Записати JSON і прописати реєстр Windows / теку Firefox.
+/// Записати JSON і прописати реєстр Windows / теки браузерів на Unix.
 ///
 /// `додаткові` — ідентифікатори розширень із магазинів, яких немає в коді.
 pub fn install_with(exe: &Path, додаткові: &[String]) -> Result<PathBuf> {
@@ -120,6 +120,9 @@ pub fn install_with(exe: &Path, додаткові: &[String]) -> Result<PathBuf
     let exe = без_префікса_unc(&exe);
     let path = manifest_path_for(Some(&exe));
     if let Some(dir) = path.parent() {
+        #[cfg(unix)]
+        ensure_private_dir(dir)?;
+        #[cfg(not(unix))]
         fs::create_dir_all(dir)?;
     }
     fs::write(&path, host_manifest_json_with(&exe, додаткові))?;
@@ -129,9 +132,34 @@ pub fn install_with(exe: &Path, додаткові: &[String]) -> Result<PathBuf
         прописати_chromium(&path)?;
         прописати_firefox(&path)?;
     }
-    #[cfg(not(windows))]
+    #[cfg(unix)]
     {
-        let _ = &path;
+        прописати_unix(&path)?;
+    }
+    Ok(path)
+}
+
+/// Прибрати маніфест і записи браузерів (реєстр / NativeMessagingHosts).
+///
+/// Відсутні файли чи ключі не є помилкою: повторне `--uninstall` має бути
+/// ідемпотентним, як і встановлення в усі відомі гілки одразу.
+pub fn uninstall_with(exe: Option<&Path>) -> Result<PathBuf> {
+    let path = manifest_path_for(exe);
+
+    #[cfg(windows)]
+    {
+        зняти_chromium()?;
+        зняти_firefox()?;
+    }
+    #[cfg(unix)]
+    {
+        зняти_unix()?;
+    }
+
+    match fs::remove_file(&path) {
+        Ok(()) => {}
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e).with_context(|| format!("не знято {}", path.display())),
     }
     Ok(path)
 }
@@ -173,6 +201,24 @@ fn прописати_chromium(manifest: &Path) -> Result<()> {
 }
 
 #[cfg(windows)]
+fn зняти_chromium() -> Result<()> {
+    let hkcu = winreg::RegKey::predef(winreg::enums::HKEY_CURRENT_USER);
+    for гілка in ГІЛКИ_CHROMIUM {
+        let parent = format!(r"{гілка}\NativeMessagingHosts");
+        // delete_subkey ігнорує відсутній ключ через перевірку; winreg
+        // повертає Err, якщо немає — це норма для повторного uninstall.
+        match hkcu.delete_subkey(format!(r"{parent}\{HOST_NAME}")) {
+            Ok(()) => {}
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+            Err(e) => {
+                return Err(e).with_context(|| format!("реєстр {parent}\\{HOST_NAME}"));
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
 fn прописати_firefox(manifest: &Path) -> io::Result<()> {
     let Some(roaming) = std::env::var_os("APPDATA") else {
         return Ok(());
@@ -185,6 +231,160 @@ fn прописати_firefox(manifest: &Path) -> io::Result<()> {
         fs::create_dir_all(dir)?;
     }
     fs::copy(manifest, dest)?;
+    Ok(())
+}
+
+#[cfg(windows)]
+fn зняти_firefox() -> io::Result<()> {
+    let Some(roaming) = std::env::var_os("APPDATA") else {
+        return Ok(());
+    };
+    let dest = PathBuf::from(roaming)
+        .join("Mozilla")
+        .join("NativeMessagingHosts")
+        .join(format!("{HOST_NAME}.json"));
+    match fs::remove_file(dest) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e),
+    }
+}
+
+/// Створити батьківську теку з режимом `0700`, якщо її ще немає.
+///
+/// Якщо тека вже є — не чіпаємо (зокрема не chmod-имо чужі `.config` /
+/// `Application Support`). `recursive` + `mode` задають 0700 лише новим.
+#[cfg(unix)]
+fn ensure_private_dir(dir: &Path) -> io::Result<()> {
+    use std::os::unix::fs::DirBuilderExt;
+
+    if dir.exists() {
+        return Ok(());
+    }
+    fs::DirBuilder::new()
+        .mode(0o700)
+        .recursive(true)
+        .create(dir)?;
+    Ok(())
+}
+
+#[cfg(unix)]
+fn home_dir() -> Option<PathBuf> {
+    std::env::var_os("HOME")
+        .filter(|h| !h.is_empty())
+        .map(PathBuf::from)
+}
+
+/// `$XDG_CONFIG_HOME` або `~/.config` — база для Chromium-форків на Linux.
+#[cfg(target_os = "linux")]
+fn config_home(home: &Path) -> PathBuf {
+    std::env::var_os("XDG_CONFIG_HOME")
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join(".config"))
+}
+
+/// Теки `NativeMessagingHosts` / `native-messaging-hosts` для поточного ОС.
+///
+/// Пишемо в усі відомі одразу, навіть якщо браузера немає: порожня тека
+/// коштує нічого, а поява браузера пізніше не потребуватиме перевстановлення.
+/// Кожен форк читає **свою** теку — як і окремі гілки реєстру на Windows.
+#[cfg(unix)]
+#[must_use]
+pub fn unix_native_messaging_dirs(home: &Path) -> Vec<PathBuf> {
+    unix_native_messaging_dirs_os(home)
+}
+
+#[cfg(target_os = "linux")]
+fn unix_native_messaging_dirs_os(home: &Path) -> Vec<PathBuf> {
+    let config = config_home(home);
+    vec![
+        config.join("google-chrome/NativeMessagingHosts"),
+        config.join("chromium/NativeMessagingHosts"),
+        config.join("microsoft-edge/NativeMessagingHosts"),
+        config.join("BraveSoftware/Brave-Browser/NativeMessagingHosts"),
+        config.join("vivaldi/NativeMessagingHosts"),
+        // Firefox на Linux — окрема конвенція (не XDG, і lowercase).
+        home.join(".mozilla/native-messaging-hosts"),
+    ]
+}
+
+#[cfg(target_os = "macos")]
+fn unix_native_messaging_dirs_os(home: &Path) -> Vec<PathBuf> {
+    let support = home.join("Library/Application Support");
+    vec![
+        support.join("Google/Chrome/NativeMessagingHosts"),
+        support.join("Chromium/NativeMessagingHosts"),
+        support.join("Microsoft Edge/NativeMessagingHosts"),
+        support.join("BraveSoftware/Brave-Browser/NativeMessagingHosts"),
+        support.join("Vivaldi/NativeMessagingHosts"),
+        support.join("Mozilla/NativeMessagingHosts"),
+    ]
+}
+
+#[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
+fn unix_native_messaging_dirs_os(home: &Path) -> Vec<PathBuf> {
+    // Інші Unix: ті самі шляхи, що й Linux (XDG + ~/.mozilla).
+    let config = std::env::var_os("XDG_CONFIG_HOME")
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join(".config"));
+    vec![
+        config.join("google-chrome/NativeMessagingHosts"),
+        config.join("chromium/NativeMessagingHosts"),
+        config.join("microsoft-edge/NativeMessagingHosts"),
+        config.join("BraveSoftware/Brave-Browser/NativeMessagingHosts"),
+        config.join("vivaldi/NativeMessagingHosts"),
+        home.join(".mozilla/native-messaging-hosts"),
+    ]
+}
+
+#[cfg(unix)]
+fn прописати_unix(manifest: &Path) -> Result<()> {
+    let Some(home) = home_dir() else {
+        return Ok(());
+    };
+    прописати_unix_у(manifest, &home)
+}
+
+/// Скопіювати маніфест у всі стандартні теки браузерів під `home`.
+///
+/// Винесено окремо, щоб тести могли підставити тимчасову «домівку» без
+/// мутації `HOME` (у Rust 2024 `env::set_var` — unsafe).
+#[cfg(unix)]
+fn прописати_unix_у(manifest: &Path, home: &Path) -> Result<()> {
+    let name = format!("{HOST_NAME}.json");
+    for dir in unix_native_messaging_dirs(home) {
+        ensure_private_dir(&dir)
+            .with_context(|| format!("тека {}", dir.display()))?;
+        let dest = dir.join(&name);
+        fs::copy(manifest, &dest)
+            .with_context(|| format!("копія → {}", dest.display()))?;
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn зняти_unix() -> Result<()> {
+    let Some(home) = home_dir() else {
+        return Ok(());
+    };
+    зняти_unix_у(&home)
+}
+
+#[cfg(unix)]
+fn зняти_unix_у(home: &Path) -> Result<()> {
+    let name = format!("{HOST_NAME}.json");
+    for dir in unix_native_messaging_dirs(home) {
+        let dest = dir.join(&name);
+        match fs::remove_file(&dest) {
+            Ok(()) => {}
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+            Err(e) => {
+                return Err(e).with_context(|| format!("не знято {}", dest.display()));
+            }
+        }
+    }
     Ok(())
 }
 
@@ -282,6 +482,23 @@ mod tests {
         }
     }
 
+    /// Той самий запобіжник Р-15 для Unix-шляхів.
+    #[cfg(unix)]
+    #[test]
+    fn серед_браузерів_unix_немає_російських() {
+        let home = Path::new("/home/test");
+        for dir in unix_native_messaging_dirs(home) {
+            let нижній = dir.display().to_string().to_lowercase();
+            assert!(
+                !нижній.contains("yandex")
+                    && !нижній.contains("mail.ru")
+                    && !нижній.contains("atom"),
+                "російський браузер у переліку: {}",
+                dir.display()
+            );
+        }
+    }
+
     /// Один маніфест обслуговує обидва сімейства браузерів.
     ///
     /// Без `allowed_extensions` Firefox відхиляє підключення, і симптом
@@ -333,6 +550,11 @@ mod tests {
         assert!(
             normal_path.ends_with(format!("Downloader\\nm\\{HOST_NAME}.json"))
                 || normal_path.ends_with(format!("Downloader/nm/{HOST_NAME}.json"))
+                || normal_path.ends_with(format!("downloader/nm/{HOST_NAME}.json"))
+                || normal_path
+                    .ends_with(format!("Application Support/Downloader/nm/{HOST_NAME}.json")),
+            "несподіваний шлях маніфесту: {}",
+            normal_path.display()
         );
 
         // З маркером
@@ -349,6 +571,69 @@ mod tests {
         std::fs::remove_dir_all(&temp)?;
         Ok(())
     }
+
+    /// `прописати_unix_у` створює теки і кладе копію маніфесту в кожну.
+    #[cfg(unix)]
+    #[test]
+    fn unix_прописує_всі_стандартні_теки() -> Result<()> {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!("nm-unix-{unique}"));
+        let home = root.join("home");
+        fs::create_dir_all(&home)?;
+
+        let canonical = root.join("canonical.json");
+        fs::write(&canonical, b"{\"name\":\"com.downloader.host\"}\n")?;
+
+        прописати_unix_у(&canonical, &home)?;
+
+        let dirs = unix_native_messaging_dirs(&home);
+        assert!(
+            dirs.len() >= 5,
+            "очікували щонайменше Chrome/Chromium/Edge/Brave/Firefox"
+        );
+        let name = format!("{HOST_NAME}.json");
+        for dir in &dirs {
+            let dest = dir.join(&name);
+            assert!(
+                dest.is_file(),
+                "немає маніфесту в {}",
+                dest.display()
+            );
+            let body = fs::read_to_string(&dest)?;
+            assert!(body.contains(HOST_NAME), "вміст: {body}");
+        }
+
+        // Firefox: на Linux — lowercase `native-messaging-hosts`.
+        #[cfg(target_os = "linux")]
+        {
+            assert!(
+                dirs.iter()
+                    .any(|d| d.ends_with(".mozilla/native-messaging-hosts")),
+                "немає Firefox-теки: {dirs:?}"
+            );
+            assert!(
+                dirs.iter()
+                    .any(|d| d.ends_with("google-chrome/NativeMessagingHosts")),
+                "немає Chrome-теки: {dirs:?}"
+            );
+        }
+
+        зняти_unix_у(&home)?;
+        for dir in &dirs {
+            let dest = dir.join(&name);
+            assert!(
+                !dest.exists(),
+                "uninstall лишив {}",
+                dest.display()
+            );
+        }
+        // Повторне зняття — ідемпотентне.
+        зняти_unix_у(&home)?;
+
+        fs::remove_dir_all(&root)?;
+        Ok(())
+    }
 }
-
-

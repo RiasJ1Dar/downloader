@@ -71,6 +71,8 @@ rand = "0.9"
 
 # Windows-специфіка winutil (BSL-1.0, permissive як MIT)
 clipboard-win = "5"
+# буфер обміну на Linux/macOS (MIT/Apache-2.0)
+arboard = "3"
 # вільне місце на диску, Windows і Unix (MIT/Apache-2.0)
 fs2 = "0.4"
 

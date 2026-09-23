@@ -23,13 +23,92 @@ use serde::{Deserialize, Serialize};
 /// відмову з поясненням, а не загадкову поведінку через півгодини роботи.
 pub const PROTOCOL_VERSION: u32 = 1;
 
-/// Ім'я каналу, на якому слухає ядро.
+/// Ім'я named pipe, на якому слухає ядро (лише Windows).
 #[cfg(windows)]
 pub const PIPE_NAME: &str = r"\\.\pipe\downloader-core";
 
-/// Шлях сокета на Unix-системах.
-#[cfg(not(windows))]
-pub const PIPE_NAME: &str = "/tmp/downloader-core.sock";
+/// Типовий шлях/ім'я каналу ядра для цієї ОС.
+///
+/// На Windows — [`PIPE_NAME`]. На Unix **не** кладемо сокет просто в `/tmp`:
+/// тека world-writable, будь-хто міг би підмінити сокет. Замість цього:
+///
+/// * Linux: `$XDG_RUNTIME_DIR/downloader/core.sock`, інакше
+///   `/tmp/downloader-$UID/core.sock` (приватна тека 0700);
+/// * macOS: `$HOME/Library/Application Support/Downloader/core.sock`,
+///   інакше `$TMPDIR/downloader-$UID/core.sock`.
+#[must_use]
+pub fn default_ipc_endpoint() -> String {
+    #[cfg(windows)]
+    {
+        PIPE_NAME.to_owned()
+    }
+    #[cfg(not(windows))]
+    {
+        default_ipc_endpoint_unix()
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn default_ipc_endpoint_unix() -> String {
+    if let Ok(runtime) = std::env::var("XDG_RUNTIME_DIR")
+        && !runtime.is_empty()
+    {
+        return format!("{runtime}/downloader/core.sock");
+    }
+    let uid = current_uid();
+    format!("/tmp/downloader-{uid}/core.sock")
+}
+
+#[cfg(target_os = "macos")]
+fn default_ipc_endpoint_unix() -> String {
+    if let Ok(home) = std::env::var("HOME")
+        && !home.is_empty()
+    {
+        return format!("{home}/Library/Application Support/Downloader/core.sock");
+    }
+    let tmp = std::env::var("TMPDIR").unwrap_or_else(|_| "/tmp".into());
+    let uid = current_uid();
+    // TMPDIR на macOS часто вже з `/` на кінці — не подвоюємо.
+    let tmp = tmp.trim_end_matches('/');
+    format!("{tmp}/downloader-{uid}/core.sock")
+}
+
+#[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
+fn default_ipc_endpoint_unix() -> String {
+    let uid = current_uid();
+    format!("/tmp/downloader-{uid}/core.sock")
+}
+
+/// UID поточного користувача без `unsafe` у цьому крейті.
+#[cfg(unix)]
+fn current_uid() -> u32 {
+    if let Ok(uid) = std::env::var("UID")
+        && let Ok(u) = uid.parse()
+    {
+        return u;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        if let Ok(status) = std::fs::read_to_string("/proc/self/status") {
+            for line in status.lines() {
+                if let Some(rest) = line.strip_prefix("Uid:")
+                    && let Some(tok) = rest.split_whitespace().next()
+                    && let Ok(u) = tok.parse()
+                {
+                    return u;
+                }
+            }
+        }
+    }
+    // macOS / запасний шлях: питаємо id(1).
+    if let Ok(out) = std::process::Command::new("id").arg("-u").output()
+        && let Ok(s) = std::str::from_utf8(&out.stdout)
+        && let Ok(u) = s.trim().parse()
+    {
+        return u;
+    }
+    0
+}
 
 /// Запит від клієнта до ядра.
 #[derive(Debug, Clone, Serialize, Deserialize)]

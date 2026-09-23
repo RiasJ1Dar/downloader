@@ -28,5 +28,9 @@ pub mod protocol;
 pub mod transport;
 
 pub use frame::{FrameError, MAX_FRAME, read_frame, write_frame};
-pub use protocol::{ErrorCode, Event, PIPE_NAME, PROTOCOL_VERSION, Request, Response, TaskView};
+pub use protocol::{
+    ErrorCode, Event, PROTOCOL_VERSION, Request, Response, TaskView, default_ipc_endpoint,
+};
+#[cfg(windows)]
+pub use protocol::PIPE_NAME;
 pub use transport::{Listener, connect, connect_to, is_core_running};

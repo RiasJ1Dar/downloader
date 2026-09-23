@@ -152,3 +152,20 @@ async fn обрив_клієнта_не_валить_серверну_сторо
     assert!(серверна.await??, "сервер мав побачити закриття з'єднання");
     Ok(())
 }
+
+#[test]
+fn типовий_канал_не_є_світовим_tmp_сокетом() {
+    let ep = downloader_ipc::default_ipc_endpoint();
+    if cfg!(windows) {
+        assert!(ep.contains("downloader-core"), "{ep}");
+    } else {
+        assert!(
+            !ep.starts_with("/tmp/downloader-core.sock"),
+            "старий world-writable шлях: {ep}"
+        );
+        assert!(
+            ep.contains("downloader") && ep.ends_with("core.sock"),
+            "неочікуваний endpoint: {ep}"
+        );
+    }
+}

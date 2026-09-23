@@ -182,7 +182,8 @@ async fn ядро_качає_файл_на_запит_клієнта() -> anyhow
     );
 
     // Файл, завантажений із мережі, мусить нести мітку — інакше SmartScreen
-    // не попередить людину.
+    // не попередить людину. На не-Windows мітки немає.
+    #[cfg(windows)]
     assert!(
         downloader_winutil::is_marked_internet(&dest),
         "ядро не позначило файл як отриманий з мережі"
@@ -781,13 +782,13 @@ async fn портативний_режим_створює_базу_поруч_і
 }
 
 #[tokio::test]
-async fn звичайний_режим_створює_базу_у_localappdata() -> anyhow::Result<()> {
+async fn звичайний_режим_створює_базу_у_типовій_теці_даних() -> anyhow::Result<()> {
     let unique = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
-    let appdata_dir = std::env::temp_dir().join(format!("dl-regular-appdata-{unique}"));
-    std::fs::create_dir_all(&appdata_dir)?;
+    let base_dir = std::env::temp_dir().join(format!("dl-regular-data-{unique}"));
+    std::fs::create_dir_all(&base_dir)?;
 
     let pipe = if cfg!(windows) {
         format!(r"\\.\pipe\downloader-reg-{unique}")
@@ -795,14 +796,25 @@ async fn звичайний_режим_створює_базу_у_localappdata()
         format!("/tmp/downloader-reg-{unique}.sock")
     };
 
-    // Запускаємо ядро з підміненим LOCALAPPDATA і без аргументу --db
-    let mut child = Command::new(env!("CARGO_BIN_EXE_downloader-core"))
-        .arg("--pipe")
-        .arg(&pipe)
-        .env("LOCALAPPDATA", &appdata_dir)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()?;
+    // Підміняємо типову теку даних ОС і запускаємо ядро без --db.
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_downloader-core"));
+    cmd.arg("--pipe").arg(&pipe).stdout(Stdio::null()).stderr(Stdio::null());
+    #[cfg(windows)]
+    {
+        cmd.env("LOCALAPPDATA", &base_dir);
+    }
+    #[cfg(target_os = "linux")]
+    {
+        cmd.env("XDG_DATA_HOME", &base_dir);
+        // Щоб HOME не перебив XDG, лишаємо XDG_DATA_HOME пріоритетним.
+    }
+    #[cfg(target_os = "macos")]
+    {
+        // default_data_dir = $HOME/Library/Application Support/Downloader
+        cmd.env("HOME", &base_dir);
+    }
+
+    let mut child = cmd.spawn()?;
 
     let mut connected = false;
     for _ in 0..100 {
@@ -815,7 +827,6 @@ async fn звичайний_режим_створює_базу_у_localappdata()
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
 
-
     let _ = child.kill();
     let _ = child.wait();
 
@@ -823,7 +834,32 @@ async fn звичайний_режим_створює_базу_у_localappdata()
         anyhow::bail!("ядро у звичайному режимі не відповіло на пінг");
     }
 
-    let expected_db = appdata_dir.join("Downloader").join("tasks.db");
+    let expected_db = {
+        #[cfg(windows)]
+        {
+            base_dir.join("Downloader").join("tasks.db")
+        }
+        #[cfg(target_os = "linux")]
+        {
+            base_dir.join("downloader").join("tasks.db")
+        }
+        #[cfg(target_os = "macos")]
+        {
+            base_dir
+                .join("Library")
+                .join("Application Support")
+                .join("Downloader")
+                .join("tasks.db")
+        }
+        #[cfg(all(
+            not(windows),
+            not(target_os = "linux"),
+            not(target_os = "macos")
+        ))]
+        {
+            base_dir.join(".local/share/Downloader").join("tasks.db")
+        }
+    };
     if !expected_db.is_file() {
         anyhow::bail!(
             "у звичайному режимі tasks.db мав створитися у {}, але файл відсутній",
@@ -831,7 +867,7 @@ async fn звичайний_режим_створює_базу_у_localappdata()
         );
     }
 
-    let _ = std::fs::remove_dir_all(&appdata_dir);
+    let _ = std::fs::remove_dir_all(&base_dir);
 
     Ok(())
 }
