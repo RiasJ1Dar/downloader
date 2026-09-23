@@ -156,6 +156,17 @@ public sealed partial class MainViewModel : ObservableObject
     [ObservableProperty]
     private bool _canDeleteCurrentQueue;
 
+    /// <summary>Чи показувати панель налаштувань (ліміти, розклад, післядія).</summary>
+    [ObservableProperty]
+    private bool _settingsOpen;
+
+    /// <summary>
+    /// Показувати вибір черги біля URL лише коли черг більше однієї —
+    /// інакше порожній ComboBox виглядає як зламаний елемент.
+    /// </summary>
+    [ObservableProperty]
+    private bool _showAddQueuePicker;
+
     [ObservableProperty]
     private bool _isCurrentQueuePaused;
 
@@ -541,6 +552,9 @@ public sealed partial class MainViewModel : ObservableObject
     }
 
     [RelayCommand]
+    private void ToggleSettings() => SettingsOpen = !SettingsOpen;
+
+    [RelayCommand]
     private async Task ApplySettingsAsync()
     {
         if (_commands is null)
@@ -872,6 +886,8 @@ public sealed partial class MainViewModel : ObservableObject
                         TargetMoveQueue = QueueNames.FirstOrDefault() ?? "default";
                     }
 
+                    ShowAddQueuePicker = QueueNames.Count > 1;
+
                     string all = Каталог.T("ui-all-queues");
                     QueueFilterOptions.Clear();
                     QueueFilterOptions.Add(all);
@@ -1191,6 +1207,14 @@ public sealed partial class TaskRow : ObservableObject
     [ObservableProperty]
     private string _url = "";
 
+    /// <summary>Хост із URL — підказка джерела під назвою.</summary>
+    [ObservableProperty]
+    private string _host = "";
+
+    /// <summary>Відсоток текстом, наприклад «42%».</summary>
+    [ObservableProperty]
+    private string _percentText = "";
+
     [ObservableProperty]
     private string? _dest;
 
@@ -1233,8 +1257,13 @@ public sealed partial class TaskRow : ObservableObject
         Активне = view.Status == "running";
 
         Url = view.Url;
+        Host = ВитягтиХост(view.Url);
         Dest = view.Dest;
         Queue = string.IsNullOrEmpty(view.Queue) ? "default" : view.Queue;
+
+        PercentText = view.Progress is { } frac
+            ? $"{frac * 100:0.#}%"
+            : "";
 
         SegmentsText = view.Segments > 1
             ? $"{view.Segments} {Каталог.Множина(view.Segments, "ui-seg-one", "ui-seg-few", "ui-seg-many")}"
@@ -1294,6 +1323,23 @@ public sealed partial class TaskRow : ObservableObject
 
     /// <summary>Забути розкладку — рядок більше не виділений.</summary>
     public void ЗабутиРозкладку() => Parts = null;
+
+    /// <summary>Витягти хост із URL для рядка списку.</summary>
+    private static string ВитягтиХост(string? url)
+    {
+        if (string.IsNullOrWhiteSpace(url))
+        {
+            return "";
+        }
+
+        if (Uri.TryCreate(url, UriKind.Absolute, out Uri? uri) &&
+            !string.IsNullOrEmpty(uri.Host))
+        {
+            return uri.Host;
+        }
+
+        return "";
+    }
 
     /// <summary>Стан людською мовою, а не кодом протоколу.</summary>
     private static string ЛюдськийСтан(string raw) => raw switch

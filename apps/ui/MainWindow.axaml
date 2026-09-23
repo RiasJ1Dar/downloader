@@ -17,7 +17,7 @@
         <!-- Рядок списку сам малює свої відступи: типовий ListBoxItem
              додає власні, і разом виходить подвійна рамка. -->
         <Style Selector="ListBoxItem" x:DataType="vm:TaskRow">
-            <Setter Property="Padding" Value="10,8"/>
+            <Setter Property="Padding" Value="12,10"/>
             <Setter Property="MinHeight" Value="0"/>
             <Setter Property="IsVisible" Value="{Binding IsVisibleInFilter}"/>
         </Style>
@@ -33,6 +33,13 @@
             <Setter Property="FontSize" Value="13"/>
         </Style>
 
+        <!-- Головна дія — Fluent accent, щоб «Завантажити» не губилась
+             серед Буфера і Якості. -->
+        <Style Selector="Button.primary">
+            <Setter Property="Padding" Value="18,0"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+        </Style>
+
         <Style Selector="TextBlock.dim">
             <Setter Property="Opacity" Value="0.6"/>
             <Setter Property="FontSize" Value="12"/>
@@ -42,9 +49,20 @@
             <Setter Property="Opacity" Value="0.5"/>
             <Setter Property="FontSize" Value="11"/>
         </Style>
+
+        <Style Selector="TextBlock.metric">
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Opacity" Value="0.9"/>
+        </Style>
+
+        <Style Selector="TextBlock.host">
+            <Setter Property="Opacity" Value="0.55"/>
+            <Setter Property="FontSize" Value="11"/>
+        </Style>
     </Window.Styles>
 
-    <Grid RowDefinitions="Auto,Auto,Auto,Auto,*,Auto,Auto" Margin="14">
+    <Grid RowDefinitions="Auto,Auto,Auto,Auto,*,Auto,Auto,Auto" Margin="14">
 
         <!-- ── Додавання ─────────────────────────────────────────────── -->
         <Grid Grid.Row="0" ColumnDefinitions="*,Auto,Auto" Margin="0,0,0,12">
@@ -57,12 +75,15 @@
                 </TextBox.KeyBindings>
             </TextBox>
 
+            <!-- Показуємо лише коли черг > 1 — інакше сирота-ComboBox. -->
             <ComboBox Grid.Column="1"
                       Margin="8,0,0,0"
+                      MinWidth="110"
                       ItemsSource="{Binding QueueNames}"
                       SelectedItem="{Binding SelectedAddQueue}"
-                      ToolTip.Tip="{i18n:T ui-queue}"
-                      IsEnabled="{Binding Connected}"/>
+                      ToolTip.Tip="{i18n:T ui-add-queue-tip}"
+                      IsEnabled="{Binding Connected}"
+                      IsVisible="{Binding ShowAddQueuePicker}"/>
 
             <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="8" Margin="8,0,0,0">
                 <Button Padding="14,0"
@@ -74,7 +95,7 @@
                         ToolTip.Tip="{i18n:T ui-choose-quality}"
                         Command="{Binding ShowQualityCommand}"
                         IsEnabled="{Binding Connected}"/>
-                <Button Padding="18,0"
+                <Button Classes="accent primary"
                         Content="{i18n:T ui-download}"
                         Command="{Binding AddCommand}"
                         IsDefault="True"
@@ -128,7 +149,8 @@
                     <Button Padding="14,4"
                             Content="{i18n:T ui-cancel}"
                             Command="{Binding CancelQualityCommand}"/>
-                    <Button Padding="18,4"
+                    <Button Classes="accent"
+                            Padding="18,4"
                             Content="{i18n:T ui-download}"
                             Command="{Binding AddCommand}"
                             IsEnabled="{Binding Connected}"/>
@@ -210,13 +232,23 @@
                 CornerRadius="6"
                 ClipToBounds="True">
           <Panel>
-            <!-- Порожній список має щось казати. Порожня рамка виглядає як
-                 несправність, а не як «ще нічого не додано». -->
-            <TextBlock Text="{i18n:T ui-empty}"
-                       Classes="dim"
-                       HorizontalAlignment="Center"
-                       VerticalAlignment="Center"
-                       IsVisible="{Binding !Tasks.Count}"/>
+            <!-- Порожній список: повідомлення + CTA в буфер. -->
+            <StackPanel HorizontalAlignment="Center"
+                        VerticalAlignment="Center"
+                        Spacing="12"
+                        IsVisible="{Binding !Tasks.Count}">
+                <TextBlock Text="{i18n:T ui-empty}"
+                           Classes="dim"
+                           TextAlignment="Center"
+                           TextWrapping="Wrap"
+                           MaxWidth="420"/>
+                <Button Classes="accent"
+                        HorizontalAlignment="Center"
+                        Padding="18,8"
+                        Content="{i18n:T ui-paste-clipboard}"
+                        Command="{Binding PasteAddCommand}"
+                        IsEnabled="{Binding Connected}"/>
+            </StackPanel>
 
             <ListBox ItemsSource="{Binding Tasks}"
                      SelectedItem="{Binding Selected}"
@@ -224,11 +256,22 @@
                 <ListBox.ItemTemplate>
                     <DataTemplate x:DataType="vm:TaskRow">
                         <Grid ColumnDefinitions="*,Auto">
-                            <StackPanel Grid.Column="0" Spacing="5">
+                            <StackPanel Grid.Column="0" Spacing="4">
 
-                                <TextBlock Text="{Binding Name}"
-                                           FontWeight="SemiBold"
-                                           TextTrimming="CharacterEllipsis"/>
+                                <Grid ColumnDefinitions="*,Auto">
+                                    <TextBlock Grid.Column="0"
+                                               Text="{Binding Name}"
+                                               FontWeight="SemiBold"
+                                               FontSize="13"
+                                               TextTrimming="CharacterEllipsis"/>
+                                    <TextBlock Grid.Column="1"
+                                               Classes="host"
+                                               Text="{Binding Host}"
+                                               Margin="10,0,0,0"
+                                               VerticalAlignment="Center"
+                                               IsVisible="{Binding Host,
+                                                   Converter={x:Static StringConverters.IsNotNullOrEmpty}}"/>
+                                </Grid>
 
                                 <!--
                                     Смужка сегментів замість ProgressBar.
@@ -236,23 +279,34 @@
                                     рядка, решта малюється як звичайний
                                     прогрес — за Fraction.
                                 -->
-                                <c:SegmentBar Height="8"
+                                <c:SegmentBar Height="9"
+                                              Margin="0,2,0,0"
                                               Parts="{Binding Parts}"
                                               Total="{Binding Total}"
                                               Fraction="{Binding Fraction}"/>
 
-                                <StackPanel Orientation="Horizontal" Spacing="10">
+                                <StackPanel Orientation="Horizontal" Spacing="12" Margin="0,2,0,0">
                                     <Border Background="{DynamicResource SystemControlBackgroundBaseLowBrush}"
                                             CornerRadius="3"
                                             Padding="6,1"
                                             VerticalAlignment="Center">
                                         <TextBlock Classes="label" Text="{Binding Queue}" FontWeight="SemiBold"/>
                                     </Border>
-                                    <TextBlock Classes="dim" Text="{Binding Status}"/>
-                                    <TextBlock Classes="dim" Text="{Binding SizeText}"/>
-                                    <TextBlock Classes="dim" Text="{Binding SpeedText}"/>
-                                    <TextBlock Classes="dim" Text="{Binding EtaText}"/>
-                                    <TextBlock Classes="dim" Text="{Binding SegmentsText}"/>
+                                    <TextBlock Classes="dim" Text="{Binding Status}" VerticalAlignment="Center"/>
+                                    <TextBlock Classes="metric"
+                                               Text="{Binding PercentText}"
+                                               MinWidth="40"
+                                               VerticalAlignment="Center"/>
+                                    <TextBlock Classes="metric"
+                                               Text="{Binding SpeedText}"
+                                               MinWidth="72"
+                                               VerticalAlignment="Center"/>
+                                    <TextBlock Classes="metric"
+                                               Text="{Binding EtaText}"
+                                               MinWidth="56"
+                                               VerticalAlignment="Center"/>
+                                    <TextBlock Classes="dim" Text="{Binding SizeText}" VerticalAlignment="Center"/>
+                                    <TextBlock Classes="dim" Text="{Binding SegmentsText}" VerticalAlignment="Center"/>
                                 </StackPanel>
 
                                 <!-- Помилку показуємо цілим текстом: людина має
@@ -344,9 +398,10 @@
                                 <TextBlock Classes="label" Text="{Binding Queue}" FontWeight="SemiBold"/>
                             </Border>
                         </StackPanel>
+                        <TextBlock Classes="metric" Text="{Binding PercentText}"/>
                         <TextBlock Classes="dim" Text="{Binding SizeText}"/>
                         <TextBlock Classes="dim" Text="{Binding SegmentsText}"/>
-                        <TextBlock Classes="dim" Text="{Binding EtaText}"/>
+                        <TextBlock Classes="metric" Text="{Binding EtaText}"/>
                         <StackPanel Orientation="Horizontal" Spacing="4" VerticalAlignment="Center" Margin="12,0,0,0">
                             <TextBlock Classes="label" Text="{i18n:T ui-queue-move}" VerticalAlignment="Center"/>
                             <ComboBox Width="110"
@@ -386,10 +441,57 @@
             </Grid>
         </Border>
 
-        <!-- Рядок стану: кружечок зв'язку плюс останнє повідомлення. Без
-             кружечка «з'єднано з ядром» губиться серед інших текстів, а це
-             найважливіше, що тут є: без ядра не працює нічого. -->
-        <Grid Grid.Row="6" ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto" Margin="2,10,0,0">
+        <!--
+            ── Налаштування (розгортається) ────────────────────────────
+            Ліміти, розклад і післядія жили внизу й захаращували смужку
+            стану. Тут ті самі прив'язки — лише інше місце.
+        -->
+        <Border Grid.Row="6"
+                Margin="0,12,0,0"
+                Padding="14,12"
+                CornerRadius="6"
+                BorderThickness="1"
+                BorderBrush="{DynamicResource SystemControlForegroundBaseLowBrush}"
+                Background="{DynamicResource SystemControlBackgroundListLowBrush}"
+                IsVisible="{Binding SettingsOpen}"
+                IsEnabled="{Binding Connected}">
+            <StackPanel Spacing="10">
+                <TextBlock Text="{i18n:T ui-settings-title}" FontWeight="SemiBold"/>
+
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                    <TextBlock Classes="label" Text="{i18n:T ui-concurrent}" VerticalAlignment="Center"/>
+                    <TextBox Width="44" Text="{Binding MaxConcurrentText}"/>
+                    <TextBlock Classes="label" Text="{i18n:T ui-kbps}" VerticalAlignment="Center"/>
+                    <TextBox Width="64" Text="{Binding RateLimitText}"/>
+                    <Button Classes="accent"
+                            Padding="12,4"
+                            Content="{i18n:T ui-apply}"
+                            Command="{Binding ApplySettingsCommand}"/>
+                </StackPanel>
+
+                <!-- Правила ядра, не вікна: розклад і післядія переживають закриття. -->
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                    <TextBlock Classes="label" Text="{i18n:T ui-after-queue}" VerticalAlignment="Center"/>
+                    <ComboBox Width="128" SelectedIndex="{Binding PostActionIndex}">
+                        <ComboBoxItem Content="{i18n:T ui-after-nothing}"/>
+                        <ComboBoxItem Content="{i18n:T ui-after-sleep}"/>
+                        <ComboBoxItem Content="{i18n:T ui-after-shutdown}"/>
+                    </ComboBox>
+                    <TextBlock Classes="label" Text="{i18n:T ui-schedule}" VerticalAlignment="Center"/>
+                    <TextBox Width="52" PlaceholderText="22:00" Text="{Binding ScheduleFromText}"/>
+                    <TextBlock Classes="label" Text="{i18n:T ui-dash}" VerticalAlignment="Center"/>
+                    <TextBox Width="52" PlaceholderText="07:00" Text="{Binding ScheduleToText}"/>
+                    <TextBlock Classes="label" Text="{i18n:T ui-night-kbps}" VerticalAlignment="Center"/>
+                    <TextBox Width="52" Text="{Binding QuietRateText}"/>
+                    <TextBox Width="52" PlaceholderText="00:00" Text="{Binding QuietFromText}"/>
+                    <TextBlock Classes="label" Text="{i18n:T ui-dash}" VerticalAlignment="Center"/>
+                    <TextBox Width="52" PlaceholderText="07:00" Text="{Binding QuietToText}"/>
+                </StackPanel>
+            </StackPanel>
+        </Border>
+
+        <!-- Рядок стану: зв'язок + тема + кнопка налаштувань. -->
+        <Grid Grid.Row="7" ColumnDefinitions="*,Auto" Margin="2,10,0,0">
             <StackPanel Orientation="Horizontal" Spacing="7">
                 <Ellipse Width="8" Height="8"
                          VerticalAlignment="Center"
@@ -397,7 +499,9 @@
                              Converter={StaticResource КолірЗвʼязку}}"/>
                 <TextBlock Classes="dim"
                            Text="{Binding Status}"
-                           TextTrimming="CharacterEllipsis"/>
+                           TextTrimming="CharacterEllipsis"
+                           MaxWidth="420"
+                           VerticalAlignment="Center"/>
                 <!-- Тема не залежить від ядра: вікно може бути темним і без нього. -->
                 <ToggleSwitch Margin="16,0,0,0"
                               IsChecked="{Binding DarkTheme}"
@@ -406,39 +510,11 @@
                               VerticalAlignment="Center"/>
             </StackPanel>
 
-            <StackPanel Grid.Column="1"
-                        Orientation="Horizontal"
-                        Spacing="8"
-                        IsEnabled="{Binding Connected}">
-                <TextBlock Classes="label" Text="{i18n:T ui-concurrent}" VerticalAlignment="Center"/>
-                <TextBox Width="44" Text="{Binding MaxConcurrentText}"/>
-                <TextBlock Classes="label" Text="{i18n:T ui-kbps}" VerticalAlignment="Center"/>
-                <TextBox Width="64" Text="{Binding RateLimitText}"/>
-                <Button Padding="12,4" Content="{i18n:T ui-apply}" Command="{Binding ApplySettingsCommand}"/>
-            </StackPanel>
-
-            <!-- Правила ядра, не вікна: розклад і післядія переживають закриття. -->
-            <StackPanel Grid.Row="1" Grid.Column="1"
-                        Orientation="Horizontal"
-                        Spacing="8"
-                        Margin="0,6,0,0"
-                        IsEnabled="{Binding Connected}">
-                <TextBlock Classes="label" Text="{i18n:T ui-after-queue}" VerticalAlignment="Center"/>
-                <ComboBox Width="128" SelectedIndex="{Binding PostActionIndex}">
-                    <ComboBoxItem Content="{i18n:T ui-after-nothing}"/>
-                    <ComboBoxItem Content="{i18n:T ui-after-sleep}"/>
-                    <ComboBoxItem Content="{i18n:T ui-after-shutdown}"/>
-                </ComboBox>
-                <TextBlock Classes="label" Text="{i18n:T ui-schedule}" VerticalAlignment="Center"/>
-                <TextBox Width="52" PlaceholderText="22:00" Text="{Binding ScheduleFromText}"/>
-                <TextBlock Classes="label" Text="{i18n:T ui-dash}" VerticalAlignment="Center"/>
-                <TextBox Width="52" PlaceholderText="07:00" Text="{Binding ScheduleToText}"/>
-                <TextBlock Classes="label" Text="{i18n:T ui-night-kbps}" VerticalAlignment="Center"/>
-                <TextBox Width="52" Text="{Binding QuietRateText}"/>
-                <TextBox Width="52" PlaceholderText="00:00" Text="{Binding QuietFromText}"/>
-                <TextBlock Classes="label" Text="{i18n:T ui-dash}" VerticalAlignment="Center"/>
-                <TextBox Width="52" PlaceholderText="07:00" Text="{Binding QuietToText}"/>
-            </StackPanel>
+            <Button Grid.Column="1"
+                    Padding="12,4"
+                    Content="{i18n:T ui-settings}"
+                    ToolTip.Tip="{i18n:T ui-settings-tip}"
+                    Command="{Binding ToggleSettingsCommand}"/>
         </Grid>
     </Grid>
 </Window>
