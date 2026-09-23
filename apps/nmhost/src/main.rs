@@ -41,6 +41,14 @@ async fn main() -> Result<()> {
         .init();
 
     let args: Vec<String> = std::env::args().collect();
+    if args.iter().any(|a| a == "--help" || a == "-h") {
+        print_usage();
+        return Ok(());
+    }
+    if args.iter().any(|a| a == "--version" || a == "-V") {
+        println!("downloader-nmhost {}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
     if args.iter().any(|a| a == "--install") {
         let exe = std::env::current_exe().context("current_exe")?;
         // Ідентифікатор розширення в Chrome Web Store призначає магазин, і
@@ -67,6 +75,14 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
+    // Browser launches us with a pipe on stdin. A TTY means a human ran the
+    // binary by hand without flags — print usage instead of blocking forever.
+    use std::io::IsTerminal;
+    if std::io::stdin().is_terminal() {
+        print_usage();
+        return Ok(());
+    }
+
     let mut stdin = stdin();
     let mut stdout = stdout();
     loop {
@@ -78,6 +94,13 @@ async fn main() -> Result<()> {
         let відповідь = обробити(msg).await;
         писати_в_браузер(&mut stdout, &відповідь).await?;
     }
+}
+
+fn print_usage() {
+    println!(
+        "downloader-nmhost {} — Native Messaging host (Chrome/Edge/Firefox → core IPC)\n\nUsage:\n  downloader-nmhost --install [--allow-extension ID]...\n  downloader-nmhost --uninstall\n  downloader-nmhost              # stdin/stdout framed JSON (browser)\n\nOptions:\n  -h, --help       Print this help and exit\n  -V, --version    Print version and exit\n  --install        Register Native Messaging manifests for supported browsers\n  --uninstall      Remove Native Messaging manifests\n  --allow-extension ID\n                   Extra Chrome/Chromium extension ID allowed to connect",
+        env!("CARGO_PKG_VERSION")
+    );
 }
 
 async fn обробити(msg: FromExt) -> ToExt {

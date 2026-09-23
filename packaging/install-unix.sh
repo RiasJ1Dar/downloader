@@ -14,7 +14,17 @@
 #   (для збірки: libgtk-3-dev libxdo-dev libayatana-appindicator3-dev)
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# Two layouts:
+#   Release tarball: install-unix.sh sits next to bin/ and share/
+#   Dev/repo:        packaging/install-unix.sh → repo root has target/ and Cargo.toml
+if [[ -x "$SCRIPT_DIR/bin/downloader-core" ]]; then
+  ROOT="$SCRIPT_DIR"
+elif [[ -f "$SCRIPT_DIR/../Cargo.toml" ]] || [[ -d "$SCRIPT_DIR/../target" ]]; then
+  ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+else
+  ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+fi
 SYSTEM=0
 PREFIX=""
 NO_AUTOSTART=0
@@ -61,6 +71,7 @@ mkdir -p "$BIN_DIR" "$SHARE_DIR"
 pick() {
   local name="$1"
   local cands=(
+    "$ROOT/bin/$name"
     "$ROOT/target/release/$name"
     "$ROOT/target/debug/$name"
     "$ROOT/target/unix/stage/bin/$name"
@@ -79,7 +90,7 @@ need() {
   local name="$1"
   local src
   if ! src="$(pick "$name")"; then
-    echo "немає $name — спочатку: cargo build --release -p downloader-cli -p downloader-core-service -p downloader-nmhost" >&2
+    echo "немає $name — очікується $ROOT/bin/$name (tarball) або cargo build --release -p downloader-cli -p downloader-core-service -p downloader-nmhost" >&2
     exit 1
   fi
   echo "$src"
@@ -98,6 +109,7 @@ install -m 755 "$NMHOST" "$BIN_DIR/downloader-nmhost"
 # UI: шукаємо publish / build вихід / staged tarball
 UI_SRC=""
 for cand in \
+  "$ROOT/share/Downloader/ui" \
   "$ROOT/target/unix/stage/share/Downloader/ui" \
   "$ROOT/apps/ui/bin/Release"/net*/linux-*/publish \
   "$ROOT/apps/ui/bin/Release"/net*/osx-*/publish \

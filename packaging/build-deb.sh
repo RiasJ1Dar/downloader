@@ -11,7 +11,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-VERSION="${VERSION:-0.1.0}"
+VERSION="${VERSION:-0.1.1}"
 ARCH_DEB="${ARCH_DEB:-amd64}"
 STAGE="${STAGE:-$ROOT/target/unix/stage}"
 OUT_DIR="$ROOT/target/unix"

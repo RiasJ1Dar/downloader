@@ -705,7 +705,7 @@ dependencies = [
 
 [[package]]
 name = "downloader-cli"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -731,7 +731,7 @@ dependencies = [
 
 [[package]]
 name = "downloader-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "async-trait",
  "hex",
@@ -746,7 +746,7 @@ dependencies = [
 
 [[package]]
 name = "downloader-core-service"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -772,7 +772,7 @@ dependencies = [
 
 [[package]]
 name = "downloader-ffmpeg"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "downloader-core",
  "thiserror 2.0.20",
@@ -782,7 +782,7 @@ dependencies = [
 
 [[package]]
 name = "downloader-i18n"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "downloader-core",
  "fluent-bundle",
@@ -792,7 +792,7 @@ dependencies = [
 
 [[package]]
 name = "downloader-ipc"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "serde",
@@ -804,7 +804,7 @@ dependencies = [
 
 [[package]]
 name = "downloader-nmhost"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "downloader-ipc",
@@ -819,7 +819,7 @@ dependencies = [
 
 [[package]]
 name = "downloader-proto-dash"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "async-trait",
  "dash-mpd",
@@ -836,7 +836,7 @@ dependencies = [
 
 [[package]]
 name = "downloader-proto-external"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -849,7 +849,7 @@ dependencies = [
 
 [[package]]
 name = "downloader-proto-hls"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "aes",
  "anyhow",
@@ -872,7 +872,7 @@ dependencies = [
 
 [[package]]
 name = "downloader-proto-http"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -889,7 +889,7 @@ dependencies = [
 
 [[package]]
 name = "downloader-proto-ytdlp"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "async-trait",
  "downloader-core",
@@ -901,7 +901,7 @@ dependencies = [
 
 [[package]]
 name = "downloader-testserver"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "aes",
  "anyhow",
@@ -915,7 +915,7 @@ dependencies = [
 
 [[package]]
 name = "downloader-winutil"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "arboard",
  "clipboard-win",

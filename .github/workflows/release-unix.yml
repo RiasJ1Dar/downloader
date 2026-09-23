@@ -13,13 +13,13 @@ on:
       version:
         description: 'Version without v prefix (e.g. 0.1.0) — tag will be v{version}-unix if creating release'
         required: false
-        default: '0.1.0'
+        default: '0.1.1'
 
 permissions:
   contents: write
 
 env:
-  VERSION: '0.1.0'
+  VERSION: '0.1.1'
 
 jobs:
   build-linux:
@@ -38,7 +38,7 @@ jobs:
             VER="${TAG#v}"
             VER="${VER%-unix}"
           else
-            VER="${{ inputs.version || '0.1.0' }}"
+            VER="${{ inputs.version || '0.1.1' }}"
           fi
           echo "version=$VER" >> "$GITHUB_OUTPUT"
           echo "Using VERSION=$VER"
@@ -93,7 +93,7 @@ jobs:
             VER="${TAG#v}"
             VER="${VER%-unix}"
           else
-            VER="${{ inputs.version || '0.1.0' }}"
+            VER="${{ inputs.version || '0.1.1' }}"
           fi
           echo "version=$VER" >> "$GITHUB_OUTPUT"
           echo "Using VERSION=$VER"
@@ -202,7 +202,7 @@ jobs:
             VER="${TAG#v}"
             VER="${VER%-unix}"
           else
-            VER="${{ inputs.version || '0.1.0' }}"
+            VER="${{ inputs.version || '0.1.1' }}"
             TAG="v${VER}-unix"
           fi
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
@@ -257,13 +257,21 @@ jobs:
             if [[ -f CHANGELOG.txt ]]; then
               echo "## Changelog excerpt"
               echo
-              # Pull the "Unix experimental" subsection from [0.1.0]
-              awk '
-                /### Додано \(Unix experimental/ {p=1}
-                p && /^### / && $0 !~ /Unix experimental/ {exit}
+              # Prefer [0.1.1] Fixed (Unix...) block; fall back to Unix experimental subsection
+              awk -v ver="$VER" '
+                $0 ~ ("## \\[" ver "\\]") {p=1; print; next}
                 p && /^## \[/ {exit}
                 p {print}
-              ' CHANGELOG.txt || true
+              ' CHANGELOG.txt > /tmp/cl-excerpt.txt || true
+              if [[ ! -s /tmp/cl-excerpt.txt ]]; then
+                awk '
+                  /### (Додано|Fixed) \(Unix/ {p=1}
+                  p && /^### / && $0 !~ /Unix/ {exit}
+                  p && /^## \[/ {exit}
+                  p {print}
+                ' CHANGELOG.txt > /tmp/cl-excerpt.txt || true
+              fi
+              cat /tmp/cl-excerpt.txt || true
             fi
           } > "$NOTES"
           cat "$NOTES"

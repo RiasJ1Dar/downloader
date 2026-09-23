@@ -4,6 +4,16 @@
 Формат базується на Keep a Changelog (https://keepachangelog.com/),
 і проєкт дотримується Semantic Versioning (https://semver.org/).
 
+## [0.1.1] - 2026-09-24
+
+### Fixed (Unix, tag v0.1.1-unix)
+- `install-unix.sh`: detect release-tarball layout (`bin/` next to the script) as well as
+  the repo/dev layout (`target/release|debug|unix/stage`). Users can run
+  `./install-unix.sh --user` from an extracted asset; UI is taken from
+  `share/Downloader/ui` when present.
+- `downloader-nmhost`: `-h`/`--help` and `-V`/`--version` print usage/version and exit 0
+  (no longer block forever on stdin). Interactive TTY with no flags also prints usage.
+
 ## [0.1.0] - 2026-09-15
 
 ### Додано (Unix experimental, теґ v0.1.0-unix)
