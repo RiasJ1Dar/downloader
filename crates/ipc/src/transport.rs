@@ -31,7 +31,7 @@
 
 use std::io;
 
-use crate::protocol::PIPE_NAME;
+use crate::protocol::default_ipc_endpoint;
 
 /// Двобічний потік, яким говорять клієнт і сервер.
 #[cfg(windows)]
@@ -67,7 +67,7 @@ impl Listener {
     /// самі завдання в той самий файл.
     #[cfg(windows)]
     pub fn bind() -> io::Result<Self> {
-        Self::bind_named(PIPE_NAME)
+        Self::bind_named(&default_ipc_endpoint())
     }
 
     /// Слухати канал із заданим іменем.
@@ -92,17 +92,39 @@ impl Listener {
         })
     }
 
-    /// Почати слухати.
+    /// Почати слухати типовий канал цієї ОС.
     #[cfg(not(windows))]
     pub fn bind() -> io::Result<Self> {
-        Self::bind_named(PIPE_NAME)
+        Self::bind_named(&default_ipc_endpoint())
     }
 
     /// Слухати сокет із заданим шляхом.
+    ///
+    /// Батьківську теку створюємо з режимом `0700` (приватна). Якщо за шляхом
+    /// уже хтось слухає — відмова (`AddrInUse`), щоб два ядра не ділили базу.
+    /// Якщо лишився мертвий файл сокета — прибираємо й займаємо місце.
     #[cfg(not(windows))]
     pub fn bind_named(name: &str) -> io::Result<Self> {
-        // Сокет міг лишитись від процесу, який не прибрав за собою.
-        let _ = std::fs::remove_file(name);
+        let path = std::path::Path::new(name);
+        if let Some(parent) = path.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            ensure_private_dir(parent)?;
+        }
+
+        match std::os::unix::net::UnixStream::connect(path) {
+            Ok(_) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::AddrInUse,
+                    "канал уже зайнятий іншим ядром",
+                ));
+            }
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+            Err(_) => {
+                drop(std::fs::remove_file(path));
+            }
+        }
+
         let inner = tokio::net::UnixListener::bind(name)?;
         Ok(Self {
             inner,
@@ -145,7 +167,7 @@ impl Listener {
 impl Drop for Listener {
     fn drop(&mut self) {
         // Файл сокета не зникає сам — прибираємо за собою.
-        let _ = std::fs::remove_file(&self.name);
+        drop(std::fs::remove_file(&self.name));
     }
 }
 
@@ -155,7 +177,7 @@ impl Drop for Listener {
 /// ситуація, а не збій: клієнт має запустити його або сказати про це людині.
 #[cfg(windows)]
 pub async fn connect() -> io::Result<ClientStream> {
-    connect_to(PIPE_NAME).await
+    connect_to(&default_ipc_endpoint()).await
 }
 
 /// Під'єднатись до каналу із заданим іменем.
@@ -168,7 +190,7 @@ pub async fn connect_to(name: &str) -> io::Result<ClientStream> {
 /// Під'єднатись до ядра.
 #[cfg(not(windows))]
 pub async fn connect() -> io::Result<ClientStream> {
-    connect_to(PIPE_NAME).await
+    connect_to(&default_ipc_endpoint()).await
 }
 
 /// Під'єднатись до каналу із заданим іменем.
@@ -180,4 +202,22 @@ pub async fn connect_to(name: &str) -> io::Result<ClientStream> {
 /// Чи ядро вже слухає канал.
 pub async fn is_core_running() -> bool {
     connect().await.is_ok()
+}
+
+/// Створити батьківську теку під unix-сокет із режимом `0700`.
+///
+/// Якщо тека вже є — не чіпаємо (зокрема не chmod-имо `/tmp` чи
+/// `XDG_RUNTIME_DIR`). `recursive` + `mode` задають 0700 лише новим текам.
+#[cfg(not(windows))]
+fn ensure_private_dir(dir: &std::path::Path) -> io::Result<()> {
+    use std::os::unix::fs::DirBuilderExt;
+
+    if dir.exists() {
+        return Ok(());
+    }
+    std::fs::DirBuilder::new()
+        .mode(0o700)
+        .recursive(true)
+        .create(dir)?;
+    Ok(())
 }

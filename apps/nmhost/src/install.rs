@@ -4,6 +4,7 @@
 //! ID розширення зашитий (поле `key` у `ext/chrome/manifest.json`).
 
 use std::fs;
+#[cfg(windows)]
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -333,6 +334,11 @@ mod tests {
         assert!(
             normal_path.ends_with(format!("Downloader\\nm\\{HOST_NAME}.json"))
                 || normal_path.ends_with(format!("Downloader/nm/{HOST_NAME}.json"))
+                || normal_path.ends_with(format!("downloader/nm/{HOST_NAME}.json"))
+                || normal_path
+                    .ends_with(format!("Application Support/Downloader/nm/{HOST_NAME}.json")),
+            "несподіваний шлях маніфесту: {}",
+            normal_path.display()
         );
 
         // З маркером

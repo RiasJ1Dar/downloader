@@ -86,6 +86,21 @@ cargo test --workspace
 cargo clippy --workspace --all-targets
 ```
 
+### Linux / macOS (experimental)
+
+Ядро (`downloader-core`) і CLI (`dl`) збираються й працюють на Linux і macOS:
+IPC — unix-сокет у `$XDG_RUNTIME_DIR` / Application Support (не world-writable
+`/tmp`), теки даних — XDG / Application Support, післядії — systemctl / pmset.
+
+Пакування (`.msi` / WiX), вікно Avalonia й трей лишаються Windows-first; native
+messaging host на Unix ще без прописування в браузер.
+
+```
+cargo build -p downloader-cli -p downloader-core-service
+./target/debug/downloader-core
+./target/debug/dl add https://example.com/file.zip
+```
+
 Вікно (потрібен .NET 10 SDK):
 
 ```

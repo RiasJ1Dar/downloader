@@ -89,6 +89,22 @@ cargo test --workspace
 cargo clippy --workspace --all-targets
 ```
 
+### Linux / macOS (experimental)
+
+The core (`downloader-core`) and CLI (`dl`) build and run on Linux and macOS:
+IPC uses a unix socket under `$XDG_RUNTIME_DIR` / Application Support (not a
+world-writable `/tmp` path), data dirs follow XDG / Application Support, and
+post-actions use systemctl / pmset.
+
+Packaging (`.msi` / WiX), the Avalonia window and the tray stay Windows-first;
+the native messaging host on Unix does not yet register itself with browsers.
+
+```
+cargo build -p downloader-cli -p downloader-core-service
+./target/debug/downloader-core
+./target/debug/dl add https://example.com/file.zip
+```
+
 The window (.NET 10 SDK required):
 
 ```

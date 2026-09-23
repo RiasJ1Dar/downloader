@@ -20,6 +20,7 @@ mod server;
 mod tray;
 
 use std::path::PathBuf;
+#[cfg(windows)]
 use std::sync::Arc;
 
 use anyhow::Context;
@@ -95,7 +96,7 @@ async fn main() -> anyhow::Result<()> {
     // незворотні.
     let pipe = cli
         .pipe
-        .unwrap_or_else(|| downloader_ipc::protocol::PIPE_NAME.to_owned());
+        .unwrap_or_else(downloader_ipc::default_ipc_endpoint);
 
     let listener = Listener::bind_named(&pipe).map_err(|e| {
         anyhow::anyhow!(
