@@ -60,6 +60,12 @@ async fn main() -> Result<()> {
         }
         return Ok(());
     }
+    if args.iter().any(|a| a == "--uninstall") {
+        let exe = std::env::current_exe().ok();
+        let path = install::uninstall_with(exe.as_deref())?;
+        eprintln!("native host знято: {}", path.display());
+        return Ok(());
+    }
 
     let mut stdin = stdin();
     let mut stdout = stdout();

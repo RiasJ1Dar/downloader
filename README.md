@@ -92,13 +92,16 @@ cargo clippy --workspace --all-targets
 IPC — unix-сокет у `$XDG_RUNTIME_DIR` / Application Support (не world-writable
 `/tmp`), теки даних — XDG / Application Support, післядії — systemctl / pmset.
 
-Пакування (`.msi` / WiX), вікно Avalonia й трей лишаються Windows-first; native
-messaging host на Unix ще без прописування в браузер.
+Пакування (`.msi` / WiX), вікно Avalonia й трей лишаються Windows-first.
+`downloader-nmhost --install` на Linux/macOS експериментально прописує
+маніфест у стандартні теки `NativeMessagingHosts` (Chrome, Chromium, Edge,
+Brave, Vivaldi, Firefox); `--uninstall` прибирає їх.
 
 ```
-cargo build -p downloader-cli -p downloader-core-service
+cargo build -p downloader-cli -p downloader-core-service -p downloader-nmhost
 ./target/debug/downloader-core
 ./target/debug/dl add https://example.com/file.zip
+./target/debug/downloader-nmhost --install
 ```
 
 Вікно (потрібен .NET 10 SDK):

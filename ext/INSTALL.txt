@@ -35,8 +35,23 @@
     HKCU\Software\Opera Software\Opera Stable\...
     %APPDATA%\Mozilla\NativeMessagingHosts\com.downloader.host.json
 
-⚠️ Кожен браузер читає СВОЮ гілку. Запис для Chrome не бачать ні Brave, ні
-Vivaldi — тому пишемо в усі відомі одразу, навіть якщо браузера ще немає.
+На Linux / macOS (експериментально) той самий `--install` копіює маніфест у
+стандартні теки браузерів, наприклад:
+
+    ~/.config/google-chrome/NativeMessagingHosts/com.downloader.host.json
+    ~/.config/chromium/NativeMessagingHosts/…
+    ~/.config/microsoft-edge/NativeMessagingHosts/…
+    ~/.config/BraveSoftware/Brave-Browser/NativeMessagingHosts/…
+    ~/.config/vivaldi/NativeMessagingHosts/…
+    ~/.mozilla/native-messaging-hosts/com.downloader.host.json
+
+    ~/Library/Application Support/Google/Chrome/NativeMessagingHosts/…
+    ~/Library/Application Support/Mozilla/NativeMessagingHosts/…
+
+Зняти: `downloader-nmhost --uninstall`.
+
+⚠️ Кожен браузер читає СВОЮ гілку / теку. Запис для Chrome не бачать ні Brave,
+ні Vivaldi — тому пишемо в усі відомі одразу, навіть якщо браузера ще немає.
 
 Розширення з магазину має інший ідентифікатор, ніж розпаковане. Щоб хост його
 приймав, додайте ID при встановленні:

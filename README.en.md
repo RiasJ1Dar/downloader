@@ -96,13 +96,16 @@ IPC uses a unix socket under `$XDG_RUNTIME_DIR` / Application Support (not a
 world-writable `/tmp` path), data dirs follow XDG / Application Support, and
 post-actions use systemctl / pmset.
 
-Packaging (`.msi` / WiX), the Avalonia window and the tray stay Windows-first;
-the native messaging host on Unix does not yet register itself with browsers.
+Packaging (`.msi` / WiX), the Avalonia window and the tray stay Windows-first.
+`downloader-nmhost --install` on Linux/macOS experimentally registers the
+manifest under the standard `NativeMessagingHosts` directories (Chrome,
+Chromium, Edge, Brave, Vivaldi, Firefox); `--uninstall` removes them.
 
 ```
-cargo build -p downloader-cli -p downloader-core-service
+cargo build -p downloader-cli -p downloader-core-service -p downloader-nmhost
 ./target/debug/downloader-core
 ./target/debug/dl add https://example.com/file.zip
+./target/debug/downloader-nmhost --install
 ```
 
 The window (.NET 10 SDK required):
