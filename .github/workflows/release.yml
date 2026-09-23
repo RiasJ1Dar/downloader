@@ -10,6 +10,8 @@ permissions:
 
 jobs:
   draft-release:
+    # Skip Unix prerelease tags (handled by release-unix.yml)
+    if: ${{ !endsWith(github.ref_name, '-unix') }}
     runs-on: windows-latest
 
     steps:

@@ -93,7 +93,12 @@ cargo clippy --workspace --all-targets
 ### Linux / macOS (experimental)
 
 The full stack (core + CLI + tray + Avalonia UI + nmhost) builds on Linux and
-macOS. MSI/WiX stay Windows-only; signed `.deb` / `.dmg` are not there yet.
+macOS. MSI/WiX stay Windows-only.
+
+**Prerelease builds:** tag [`v0.1.0-unix`](https://github.com/RiasJ1Dar/downloader/releases/tag/v0.1.0-unix)
+(assets: `Downloader-0.1.0-linux-x64.tar.gz` / `.deb`, `Downloader-0.1.0-macos-arm64.tar.gz`,
+`Downloader-0.1.0-macos-x64.tar.gz`). Packages are **unsigned** and **not notarized** —
+Gatekeeper on macOS will warn on first launch. No AppImage / `.dmg` in this cut.
 
 - **IPC:** `$XDG_RUNTIME_DIR/downloader/core.sock` (Linux) or
   `$HOME/Library/Application Support/Downloader/core.sock` (macOS) — not a
@@ -101,27 +106,23 @@ macOS. MSI/WiX stay Windows-only; signed `.deb` / `.dmg` are not there yet.
 - **Tray:** needs a desktop session. On Linux: `libgtk-3` +
   `libayatana-appindicator3` (or `libappindicator3`). Without `DISPLAY` the
   core warns and still serves IPC (`cargo test` with `--pipe` skips the tray).
+- **Autostart:** `packaging/install-unix.sh` installs a systemd user unit
+  (`packaging/systemd/downloader-core.service`, `systemctl --user enable --now`)
+  on Linux and a LaunchAgent (`packaging/macos/com.riasj1dar.downloader-core.plist`
+  → `~/Library/LaunchAgents`, `launchctl load`) on macOS. Missing systemd/launchctl
+  does not fail the install (`--no-autostart` to skip).
 - **nmhost:** `--install` / `--uninstall` → standard `NativeMessagingHosts`
   (Chrome, Chromium, Edge, Brave, Vivaldi, Firefox).
 
-Build and run:
+Build artifacts / install:
 
 ```
-# Rust 1.90+
+./packaging/build-unix-tarball.sh
+./packaging/build-deb.sh          # Linux only → .deb
+
 cargo build --release -p downloader-cli -p downloader-core-service -p downloader-nmhost
-
-# UI (.NET 10 SDK)
-dotnet publish -c Release apps/ui
-
-# install into ~/.local/share/Downloader (+ .desktop, nmhost)
+dotnet publish -c Release -r linux-x64 --self-contained true apps/ui   # or osx-arm64
 ./packaging/install-unix.sh --user
-
-# or by hand:
-./target/release/downloader-core &          # tray + IPC
-./target/release/dl add https://example.com/file.zip
-dotnet run --project apps/ui -c Release    # or published Downloader.Ui
-./target/release/downloader-nmhost --install
-./target/release/dl ffmpeg-install         # for YouTube / DASH
 ```
 
 Tray build deps (Debian/Ubuntu):
@@ -129,6 +130,9 @@ Tray build deps (Debian/Ubuntu):
 ```
 sudo apt install libgtk-3-dev libxdo-dev libayatana-appindicator3-dev pkg-config
 ```
+
+CI prerelease: `.github/workflows/release-unix.yml` on tags `v*-unix` (ubuntu +
+macos runners). Windows MSI stays on `.github/workflows/release.yml` / tags `v*`.
 
 Installers (WiX 6 required — `dotnet tool install --global wix`):
 

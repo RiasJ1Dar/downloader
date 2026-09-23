@@ -90,7 +90,13 @@ cargo clippy --workspace --all-targets
 ### Linux / macOS (experimental)
 
 Повний стек (ядро + CLI + трей + Avalonia UI + nmhost) збирається на Linux і
-macOS. MSI/WiX лишаються Windows-only; підписаних `.deb` / `.dmg` ще немає.
+macOS. MSI/WiX лишаються Windows-only.
+
+**Готовий prerelease:** теґ [`v0.1.0-unix`](https://github.com/RiasJ1Dar/downloader/releases/tag/v0.1.0-unix)
+(Assets: `Downloader-0.1.0-linux-x64.tar.gz` / `.deb`, `Downloader-0.1.0-macos-arm64.tar.gz`,
+`Downloader-0.1.0-macos-x64.tar.gz`). Пакети **не підписані** і **не notarized** —
+Gatekeeper на macOS попередить при першому запуску. AppImage / `.dmg` у цьому
+випуску немає.
 
 - **IPC:** `$XDG_RUNTIME_DIR/downloader/core.sock` (Linux) або
   `$HOME/Library/Application Support/Downloader/core.sock` (macOS) — не
@@ -99,27 +105,31 @@ macOS. MSI/WiX лишаються Windows-only; підписаних `.deb` / `.
   `libayatana-appindicator3` (або `libappindicator3`). Без `DISPLAY` ядро
   лише попереджає і далі обслуговує IPC (`cargo test` з `--pipe` трей
   пропускає).
+- **Автозапуск:** `packaging/install-unix.sh` ставить systemd user unit
+  (`packaging/systemd/downloader-core.service`, `systemctl --user enable --now`)
+  на Linux і LaunchAgent (`packaging/macos/com.riasj1dar.downloader-core.plist`
+  → `~/Library/LaunchAgents`, `launchctl load`) на macOS. Без systemd/launchctl
+  інсталяція не падає (`--no-autostart` щоб пропустити).
 - **nmhost:** `--install` / `--uninstall` → стандартні `NativeMessagingHosts`
   (Chrome, Chromium, Edge, Brave, Vivaldi, Firefox).
 
-Збірка й запуск:
+Збірка артефактів / встановлення:
 
 ```
-# Rust 1.90+
+# tarball (+ UI якщо є dotnet): linux-x64 на Linux, macos-arm64/x64 на macOS CI
+./packaging/build-unix-tarball.sh
+./packaging/build-deb.sh          # лише Linux → .deb
+
+# з сирців:
 cargo build --release -p downloader-cli -p downloader-core-service -p downloader-nmhost
-
-# UI (.NET 10 SDK)
-dotnet publish -c Release apps/ui
-
-# поставити в ~/.local/share/Downloader (+ .desktop, nmhost)
+dotnet publish -c Release -r linux-x64 --self-contained true apps/ui   # або osx-arm64
 ./packaging/install-unix.sh --user
 
-# або вручну:
-./target/release/downloader-core &          # трей + IPC
+# вручну:
+./target/release/downloader-core &
 ./target/release/dl add https://example.com/file.zip
-dotnet run --project apps/ui -c Release    # або опублікований Downloader.Ui
 ./target/release/downloader-nmhost --install
-./target/release/dl ffmpeg-install         # для YouTube / DASH
+./target/release/dl ffmpeg-install
 ```
 
 Залежності збірки трею (Debian/Ubuntu):
@@ -127,6 +137,9 @@ dotnet run --project apps/ui -c Release    # або опублікований D
 ```
 sudo apt install libgtk-3-dev libxdo-dev libayatana-appindicator3-dev pkg-config
 ```
+
+CI prerelease: `.github/workflows/release-unix.yml` на теґи `v*-unix` (ubuntu +
+macos runners). Windows MSI лишається на `.github/workflows/release.yml` / теґи `v*`.
 
 Інсталятори (потрібен WiX 6 — `dotnet tool install --global wix`):
 

@@ -1,0 +1,14 @@
+[Unit]
+Description=Downloader core service (tray + IPC)
+Documentation=https://github.com/RiasJ1Dar/downloader
+After=default.target
+
+[Service]
+Type=simple
+ExecStart=__DOWNLOADER_CORE__
+Restart=on-failure
+RestartSec=3
+Environment=RUST_LOG=info
+
+[Install]
+WantedBy=default.target

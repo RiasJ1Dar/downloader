@@ -6,6 +6,17 @@
 
 ## [0.1.0] - 2026-09-15
 
+### Додано (Unix experimental, теґ v0.1.0-unix)
+- Повний стек на Linux і macOS: ядро (tray + IPC), CLI `dl`, Avalonia UI, nmhost.
+- Автозапуск: systemd user unit `packaging/systemd/downloader-core.service` та
+  LaunchAgent `packaging/macos/com.riasj1dar.downloader-core.plist`; підключає
+  `packaging/install-unix.sh` (`systemctl --user enable --now` / `launchctl load`).
+- Пакування без підпису: `build-unix-tarball.sh` (linux-x64, macos-arm64, macos-x64),
+  `build-deb.sh` → `.deb`. AppImage / notarized `.dmg` немає.
+- CI prerelease: `.github/workflows/release-unix.yml` на теґи `v*-unix`
+  (ubuntu-latest + macos-latest). Windows `release.yml` лишається для `v*`;
+  теґи `*-unix` пропускаються.
+
 ### Додано
 - Багатопотоковий рушій завантаження (Rust core):
   - Сегментація файлу на паралельні частини з динамічним викраденням залишків (work stealing).
