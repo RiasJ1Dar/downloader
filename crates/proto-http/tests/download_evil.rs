@@ -131,6 +131,30 @@ async fn сервер_без_range_качається_одним_потоком_
 }
 
 #[tokio::test]
+async fn fakerange_після_проби_відкочується_в_один_потік() -> anyhow::Result<()> {
+    let s = EvilServer::start().await?;
+    let tmp = Temp::new("fakerange");
+
+    // Проба бачить 206 на bytes=0-0 і планує сегменти; реальні Range дають
+    // 200. Раніше це була жорстка помилка «докачування неможливе».
+    let out = download(&client(), &s.url("/fakerange/256k"), &tmp.0, &opts(8)).await?;
+
+    assert_eq!(
+        sha256_of(&tmp.0)?,
+        expected_sha256("/fakerange/256k")?,
+        "відкіт після фальшивого Range не має псувати вміст; байтів {}",
+        out.bytes
+    );
+    assert_eq!(
+        out.segments, 1,
+        "після відкату має лишитись один сегмент, а не багатодіркова каша"
+    );
+
+    s.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test]
 async fn тимчасові_503_переживаються_повторами() -> anyhow::Result<()> {
     let s = EvilServer::start().await?;
     let tmp = Temp::new("flaky");

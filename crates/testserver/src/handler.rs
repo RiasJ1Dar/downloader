@@ -51,6 +51,7 @@ async fn route(wr: &mut OwnedWriteHalf, req: &Request, state: &ServerState) -> R
             serve_honest(wr, req, total, &format!("\"plain-{total}\"")).await
         }
         ["norange", size] => serve_norange(wr, req, parse_size(size)?).await,
+        ["fakerange", size] => serve_fakerange(wr, req, parse_size(size)?).await,
         ["cut", size, at] => serve_cut(wr, req, parse_size(size)?, parse_size(at)?).await,
         ["flaky", size, n] => {
             let (total, fails) = (parse_size(size)?, parse_count(n)?);
@@ -124,7 +125,7 @@ async fn route(wr: &mut OwnedWriteHalf, req: &Request, state: &ServerState) -> R
             // «чому рушій качає 9 байтів».
             let msg = format!(
                 "невідомий сценарій: target={:?}, сегменти={:?}. \
-                 Доступні: /plain /norange /cut /flaky /changing /liar-length \
+                 Доступні: /plain /norange /fakerange /cut /flaky /changing /liar-length \
                  /gzip /slow /slow-range /redirect /auth /disposition /head-only /no-head \
                  /hls/vod /hls/live /hls/media /hls/drm /dash/vod",
                 req.target, segs
@@ -246,6 +247,58 @@ async fn serve_norange(wr: &mut OwnedWriteHalf, req: &Request, total: u64) -> Re
         write_body(wr, &mut bg, total, None).await?;
     }
     wr.flush().await.context("flush norange")
+}
+
+// ── Сценарій: Range лише для проби ──────────────────────────────────────────
+
+/// `206` лише на `Range: bytes=0-0` (проба рушія). Будь-який інший діапазон —
+/// `200` і повне тіло, хоча `Accept-Ranges: bytes`. Так брешуть деякі CDN /
+/// GitHub codeload: проба «доводить» Range, а сегментоване качання ламається.
+async fn serve_fakerange(wr: &mut OwnedWriteHalf, req: &Request, total: u64) -> Result<()> {
+    use crate::request::RangeSpec;
+
+    let etag = format!("\"fakerange-{total}\"");
+
+    if let Some(RangeSpec::FromTo(0, 0)) = req.range() {
+        let head = build_head(
+            206,
+            &[
+                ("Accept-Ranges", "bytes"),
+                ("Content-Type", "application/octet-stream"),
+                ("Content-Length", "1"),
+                ("Content-Range", &format!("bytes 0-0/{total}")),
+                ("ETag", &etag),
+                ("Last-Modified", LAST_MODIFIED),
+            ],
+        );
+        wr.write_all(&head)
+            .await
+            .context("запис заголовків fakerange 206")?;
+        if !req.is_head() {
+            let mut bg = BodyGen::new(total);
+            write_body(wr, &mut bg, 1, None).await?;
+        }
+        return wr.flush().await.context("flush fakerange 206");
+    }
+
+    let head = build_head(
+        200,
+        &[
+            ("Accept-Ranges", "bytes"),
+            ("Content-Type", "application/octet-stream"),
+            ("Content-Length", &total.to_string()),
+            ("ETag", &etag),
+            ("Last-Modified", LAST_MODIFIED),
+        ],
+    );
+    wr.write_all(&head)
+        .await
+        .context("запис заголовків fakerange 200")?;
+    if !req.is_head() {
+        let mut bg = BodyGen::new(total);
+        write_body(wr, &mut bg, total, None).await?;
+    }
+    wr.flush().await.context("flush fakerange 200")
 }
 
 // ── Сценарій 3: обрив посеред тіла ──────────────────────────────────────────

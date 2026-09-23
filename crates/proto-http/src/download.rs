@@ -111,12 +111,13 @@ pub enum DownloadError {
     #[error(transparent)]
     Core(#[from] downloader_core::Error),
 
-    /// На докачування сервер віддав `200` замість `206`.
+    /// На діапазонний запит сервер віддав `200` замість `206`.
     ///
     /// Це або змінений ресурс (`If-Range` не збігся), або сервер, який
-    /// узагалі не тримає `Range`. Розрізнити ззовні неможливо, та й не
-    /// треба: обидва випадки означають, що тіло приїхало **з початку
-    /// файла**, і писати його в поточний зсув не можна — вийде каша.
+    /// узагалі не тримає `Range`. Тіло приїхало **з початку файла**, тож
+    /// писати його в поточний зсув не можна. Зовнішній шар
+    /// [`download_with_probe`] ловить цю помилку і **один раз** відкатує
+    /// качання в один потік з нуля; повтор — уже остаточна відмова.
     #[error(
         "докачування неможливе для {url}: сервер віддав повний файл замість діапазону \
          (ресурс змінився або Range не підтримується)"
@@ -210,7 +211,50 @@ pub async fn download(
 
 /// Те саме, коли проба вже зроблена (наприклад, щоб показати людині розмір
 /// і дати обрати теку до початку качання).
+///
+/// Якщо сервер на сегментований `Range` відповів `200` із повним тілом
+/// (Range не підтримується, або `If-Range` не збігся) — **один раз**
+/// повторюємо качання одним потоком з нуля замість жорсткої помилки.
+/// Так поводяться поширені хости на кшталт GitHub codeload.
 pub async fn download_with_probe(
+    client: &Client,
+    info: &Probe,
+    dest: &Path,
+    opts: &Options,
+) -> Result<Outcome, DownloadError> {
+    match download_once(client, info, dest, opts).await {
+        Err(DownloadError::ResourceChanged { url }) => {
+            tracing::warn!(
+                %url,
+                "сервер віддав повний файл замість діапазону                  (Range не підтримується або ресурс змінився) —                  повторюємо одним потоком з нуля"
+            );
+            clear_partial(dest);
+            let mut single = info.clone();
+            single.resumable = false;
+            download_once(client, &single, dest, opts).await
+        }
+        other => other,
+    }
+}
+
+/// Прибрати частковий файл і стан перед відкатом в один потік.
+fn clear_partial(dest: &Path) {
+    if let Err(e) = state::remove(dest) {
+        tracing::debug!(error = %e, "не вдалося прибрати стан перед відкатом у один потік");
+    }
+    if dest.exists()
+        && let Err(e) = std::fs::remove_file(dest)
+    {
+        tracing::warn!(
+            error = %e,
+            path = %dest.display(),
+            "не вдалося прибрати частковий файл перед відкатом у один потік"
+        );
+    }
+}
+
+/// Одна спроба сегментованого (або однопотокового) качання.
+async fn download_once(
     client: &Client,
     info: &Probe,
     dest: &Path,
@@ -530,18 +574,24 @@ async fn pull(
 ) -> Result<(), DownloadError> {
     let mut req = apply_session(client.get(&shared.url), &shared.opts.session);
 
-    // Межа в HTTP включна, тому `to - 1`. Нескінченний хвіст (`to` = MAX)
-    // просимо відкритим діапазоном.
-    if to == u64::MAX {
-        req = req.header(RANGE, format!("bytes={from}-"));
-    } else {
-        req = req.header(RANGE, format!("bytes={from}-{}", to - 1));
-    }
+    // Range лише коли є сенс: доведений resumable, або докачування з
+    // ненульового зсуву. На «звичайний» однопотоковий GET зайвий `Range`
+    // лише провокує дивну поведінку хостів на кшталт GitHub codeload.
+    let ask_range = shared.resumable || from > 0;
+    if ask_range {
+        // Межа в HTTP включна, тому `to - 1`. Нескінченний хвіст (`to` = MAX)
+        // просимо відкритим діапазоном.
+        if to == u64::MAX {
+            req = req.header(RANGE, format!("bytes={from}-"));
+        } else {
+            req = req.header(RANGE, format!("bytes={from}-{}", to - 1));
+        }
 
-    // `If-Range` на **кожному** запиті: ресурс міг змінитись і посеред
-    // качання, не лише між сесіями.
-    if let Some(v) = shared.validator.if_range_value() {
-        req = req.header(IF_RANGE, v);
+        // `If-Range` на **кожному** діапазонному запиті: ресурс міг змінитись
+        // і посеред качання, не лише між сесіями.
+        if let Some(v) = shared.validator.if_range_value() {
+            req = req.header(IF_RANGE, v);
+        }
     }
 
     let resp = req
@@ -555,13 +605,24 @@ async fn pull(
 
     let status = resp.status();
 
-    // `200` там, де ми просили діапазон, означає одне з двох: сервер
-    // ігнорує `Range` (тоді ми качаємо з нуля одним сегментом), або ресурс
-    // змінився і `If-Range` не збігся. Друге — привід зупинитись.
-    if status == StatusCode::OK && from > 0 {
-        return Err(DownloadError::ResourceChanged {
-            url: shared.url.clone(),
-        });
+    // `200` у відповідь на діапазон: тіло з початку файла. Писати його в
+    // `from > 0` не можна; навіть при `from == 0`, якщо просили лише шматок
+    // (не весь файл), краще відкотитись в один потік, ніж записати перший
+    // сегмент і впасти на другому.
+    if status == StatusCode::OK && ask_range {
+        let partial_request = from > 0 || {
+            to != u64::MAX
+                && shared
+                    .state
+                    .lock()
+                    .ok()
+                    .is_some_and(|s| to < s.table.total())
+        };
+        if partial_request {
+            return Err(DownloadError::ResourceChanged {
+                url: shared.url.clone(),
+            });
+        }
     }
     if !(status.is_success() || status == StatusCode::PARTIAL_CONTENT) {
         return Err(DownloadError::BadStatus {

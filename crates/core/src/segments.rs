@@ -314,6 +314,15 @@ impl SegmentTable {
     /// сегмента **перед кожним записом**: інакше він допише байти в чужий
     /// діапазон і зіпсує файл.
     pub fn steal(&mut self, min_chunk: u64) -> Option<SegmentId> {
+        // Невідомий розмір (відкритий кінець `u64::MAX`) ділити не можна:
+        // «залишок» формально величезний, і крадіжка породжує сегмент із
+        // `from > 0`. Наступний `Range` на хостах без справжнього Range
+        // (GitHub codeload тощо) дає 200 і жорстку помилку — хоча файл уже
+        // цілком на диску.
+        if self.total == u64::MAX {
+            return None;
+        }
+
         let threshold = min_chunk.saturating_mul(2).max(2);
 
         let (pos, remaining) = self
@@ -568,6 +577,17 @@ mod tests {
 
         assert!(t.is_complete());
         assert!(t.steal(1).is_none(), "усе завантажено — красти нема чого");
+    }
+
+    #[test]
+    fn крадіжка_відмовляє_на_невідомому_розмірі() {
+        let mut t = SegmentTable::single(u64::MAX);
+        t.advance(0, 1024).unwrap();
+
+        assert!(
+            t.steal(1).is_none(),
+            "відкритий кінець не можна ділити — це фантомний Range посеред файла"
+        );
     }
 
     #[test]
