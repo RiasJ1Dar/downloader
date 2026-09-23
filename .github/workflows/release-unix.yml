@@ -1,7 +1,7 @@
 name: release-unix
 
 # Linux + macOS experimental prerelease.
-# Trigger: tags v*-unix (e. torr v0.1.0-unix) or manual dispatch.
+# Trigger: tags v*-unix (e.g. v0.1.0-unix) or manual dispatch.
 # Does NOT replace Windows release.yml (MSI on tags v*).
 
 on:
@@ -38,7 +38,7 @@ jobs:
             VER="${TAG#v}"
             VER="${VER%-unix}"
           else
-            VER="${{ github.event.inputs.version || '0.1.0' }}"
+            VER="${{ inputs.version || '0.1.0' }}"
           fi
           echo "version=$VER" >> "$GITHUB_OUTPUT"
           echo "Using VERSION=$VER"
@@ -93,7 +93,7 @@ jobs:
             VER="${TAG#v}"
             VER="${VER%-unix}"
           else
-            VER="${{ github.event.inputs.version || '0.1.0' }}"
+            VER="${{ inputs.version || '0.1.0' }}"
           fi
           echo "version=$VER" >> "$GITHUB_OUTPUT"
           echo "Using VERSION=$VER"
@@ -160,11 +160,11 @@ jobs:
           install -m 755 "$ROOT/packaging/install-unix.sh" "$STAGE/install-unix.sh"
           cp "$ROOT/packaging/systemd/downloader-core.service" "$STAGE/packaging/systemd/"
           cp "$ROOT/packaging/macos/com.riasj1dar.downloader-core.plist" "$STAGE/packaging/macos/"
-          cat > "$STAGE/README-UNIX.txt" <<EOF
-Downloader ${VER} — macos-x64 (experimental, UNSIGNED)
-Install: ./install-unix.sh --user
-Gatekeeper will warn — packages are not notarized.
-EOF
+          printf '%s\n' \
+            "Downloader ${VER} - macos-x64 (experimental, UNSIGNED)" \
+            "Install: ./install-unix.sh --user" \
+            "Gatekeeper will warn - packages are not notarized." \
+            > "$STAGE/README-UNIX.txt"
 
           TMP="$OUT/_pack-x64"
           rm -rf "$TMP"
@@ -202,7 +202,7 @@ EOF
             VER="${TAG#v}"
             VER="${VER%-unix}"
           else
-            VER="${{ github.event.inputs.version || '0.1.0' }}"
+            VER="${{ inputs.version || '0.1.0' }}"
             TAG="v${VER}-unix"
           fi
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
