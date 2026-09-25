@@ -64,11 +64,14 @@ Its licence ships alongside, in `LICENSE-ffmpeg.txt`.
 
 ## Command line
 
+The console client is `dl`. It can do everything the window can. Quick start:
+
 ```
 dl get https://example.com/file.zip -o file.zip
 ```
 
-With the core in the tray, a task outlives the console:
+`dl get` downloads by itself, in this console. The other commands drive the **core**
+(`downloader-core`, lives in the tray): a task handed over with `dl add` outlives the console.
 
 ```
 downloader-core
@@ -79,7 +82,148 @@ dl list
 dl watch
 ```
 
-Language: `dl --lang en …` or `DOWNLOADER_LANG=en`. The default is Ukrainian.
+### Commands
+
+| Command | What it does |
+|---|---|
+| `dl get <URL>` | download a file right in this process |
+| `dl probe <URL>` | show what is known about a link without downloading |
+| `dl variants <URL>` | list quality variants (HLS, DASH, YouTube); no core needed |
+| `dl add [URL]` | hand a download over to the core |
+| `dl list` | list the core's tasks |
+| `dl parts <ID>` | show how a task is split into parts (what the segment bar shows) |
+| `dl pause <ID>` | pause a task |
+| `dl resume <ID>` | resume a paused task |
+| `dl rm <ID> [--with-file]` | remove a task from the list; `--with-file` also deletes the downloaded bytes |
+| `dl move <ID> -q <QUEUE>` | move a task to another queue |
+| `dl watch` | follow progress until Ctrl+C |
+| `dl settings` | show the core's rules: queue, limit, schedule, after-action |
+| `dl configure …` | change the core's rules |
+| `dl queue …` | manage named queues |
+| `dl ffmpeg-install` | install ffmpeg next to the program |
+| `dl ytdlp-update` | update yt-dlp (`yt-dlp -U`) |
+| `dl update` | check for a newer version (check only, installs nothing) |
+| `dl completions <SHELL>` | generate shell completion: `pwsh`, `bash`, `zsh`, `fish`, `elvish` |
+
+`<ID>` is an id from `dl list`. `dl --version` prints the version, `dl <command> --help` the help.
+
+### Options
+
+Common to every command: `--lang uk|en`.
+
+**`dl get <URL>`**
+
+| Option | Default | Meaning |
+|---|---|---|
+| `-o, --out <FILE>` | — | where to save; without it the name comes from `Content-Disposition` or the URL |
+| `-n, --parts <N>` | `8` | how many connections to open |
+| `--min-chunk <BYTES>` | `1048576` | smallest chunk per connection |
+| `--limit-kb <KB/s>` | `0` | speed cap; `0` means unlimited |
+| `--checkpoint-ms <MS>` | `2000` | how often the state is flushed to disk |
+| `--cookie <STRING>` | — | Cookie header: `n=v; n2=v2` |
+| `--referer <URL>` | — | Referer header |
+| `--variant <ID>` | — | quality variant: a value from the first column of `dl variants` |
+| `--duration <TIME>` | — | duration cap for live streams: `30s`, `10m`, `1h` |
+| `--rewind` | — | start a live stream from the beginning of its buffer (DVR) |
+
+**`dl add [URL]`** — the URL may be a pattern `file[001-010].zip`, which expands into a list.
+
+| Option | Meaning |
+|---|---|
+| `--list <FILE>` | file with URLs (one per line, `#` starts a comment) |
+| `--clipboard` | take URLs from the clipboard |
+| `-o, --out <FILE>` | where to save; ignored for several URLs |
+| `-n, --parts <N>` | how many connections |
+| `-q, --queue <QUEUE>` | queue, `default` by default |
+| `--cookie`, `--referer`, `--duration`, `--rewind` | as in `dl get` |
+
+**`dl variants <URL>`** accepts `--cookie` and `--referer`.
+
+**`dl configure`** — an omitted option leaves that field unchanged.
+
+| Option | Meaning |
+|---|---|
+| `--max <N>` | how many tasks run at once |
+| `--rate-kb <KB/s>` | speed cap; `0` means unlimited |
+| `--after <ACTION>` | once the queue is empty: `none`, `sleep` or `shutdown` |
+| `--from <HH:MM>`, `--to <HH:MM>` | window in which tasks may start |
+| `--clear-schedule` | remove the schedule (download any time) |
+| `--quiet-from <HH:MM>`, `--quiet-to <HH:MM>` | night speed profile |
+| `--quiet-kb <KB/s>` | night limit; `0` disables the night profile |
+| `--clear-quiet` | remove the night profile |
+
+**`dl queue`**
+
+| Command | Meaning |
+|---|---|
+| `dl queue list` | list queues |
+| `dl queue add <NAME> [options]` | create a queue |
+| `dl queue set <NAME> [options] [--clear-schedule]` | change a queue's settings |
+| `dl queue pause <NAME>` / `resume <NAME>` | pause / resume every task in the queue |
+| `dl queue rename <OLD> <NEW>` | rename |
+| `dl queue rm <NAME>` | delete; its tasks move to `default` |
+
+Queue options: `--max <N>`, `--rate-kb <KB/s>`, `--from <HH:MM>`, `--to <HH:MM>`,
+`--after none|sleep|shutdown`. The `default` queue cannot be deleted or renamed.
+
+**`dl update`**
+
+| Option | Meaning |
+|---|---|
+| `--check [true\|false]` | only check and verify hashes (`true` by default) |
+| `--manifest <PATH\|URL>` | local file or URL of the update manifest |
+| `--verify-file <FILE>` | verify a downloaded file's SHA-256 against the manifest |
+
+**Completion** for PowerShell:
+
+```
+dl completions pwsh | Out-String | Invoke-Expression
+```
+
+### Environment variables
+
+| Variable | Meaning |
+|---|---|
+| `DOWNLOADER_LANG` | `uk` or `en`; same as `--lang` |
+| `DOWNLOADER_PROXY` | HTTP proxy (`http://…` or `socks5://…`); `none` or empty means no proxy. Without it `HTTPS_PROXY` / `HTTP_PROXY` are used |
+| `DOWNLOADER_MAX_CONCURRENT` | core: tasks at once, overrides the saved setting |
+| `DOWNLOADER_RATE_LIMIT` | core: speed cap in **bytes** per second, overrides the saved setting |
+| `DOWNLOADER_WATCH_CLIPBOARD` | `0` stops the core from watching the clipboard |
+| `DOWNLOADER_POST_DELAY_MS` | delay before the after-action (sleep / shutdown), 60000 by default |
+| `DOWNLOADER_POST_ACTION_DRY` | `1` only simulates the after-action (for testing) |
+
+Without the option or variable the language follows the OS; a Russian or any other OS gets Ukrainian.
+
+### Where data lives
+
+| What | Normal mode | Portable mode |
+|---|---|---|
+| Program | `%LOCALAPPDATA%\Programs\Downloader` | any folder containing `portable.txt` |
+| Tasks and settings | `%LOCALAPPDATA%\Downloader\tasks.db` | `<program folder>\tasks.db` |
+| Window theme | `%LOCALAPPDATA%\Downloader\ui.json` | `<program folder>\ui.json` |
+| Downloads | `%USERPROFILE%\Downloads` | `<program folder>\Downloads` |
+
+Portable mode is switched on by an empty `portable.txt` next to `dl.exe`, `downloader-core.exe` and
+`Downloader.Ui.exe`. More in [INSTALL.txt](INSTALL.txt) (Ukrainian).
+
+### Core and native host
+
+```
+downloader-core [--db <FILE>] [--downloads <DIR>] [--pipe <NAME>] [--lang uk|en]
+```
+
+| Option | Meaning |
+|---|---|
+| `--db <FILE>` | another task database file |
+| `--downloads <DIR>` | where files without an explicit path go |
+| `--pipe <NAME>` | another channel name — for tests and several independent instances |
+| `--lang uk\|en` | language of the tray and messages |
+
+The core's log level is set with `RUST_LOG` (`info` by default).
+
+The browser extension talks to the core through `downloader-nmhost`. The core registers it on every
+start; by hand: `downloader-nmhost --install [--allow-extension <ID>]`, where `--allow-extension`
+allows one more extension ID (repeatable). Instructions: [ext/INSTALL.txt](ext/INSTALL.txt).
 
 ## Building
 
