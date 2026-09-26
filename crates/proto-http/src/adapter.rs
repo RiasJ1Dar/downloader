@@ -85,6 +85,31 @@ impl HttpProtocol {
             _ => self.session.lock().map(|g| g.clone()).unwrap_or_default(),
         }
     }
+
+    /// Копія модуля для одного запуску з іншою кількістю з'єднань.
+    ///
+    /// HTTP-клієнт і лімітер безпечно спільні, а mutable-настройки
+    /// копіюються: два паралельні завдання не перетирають одне одному
+    /// `parts`, сесію чи стелю швидкості.
+    fn для_паралельності(&self, parts: usize) -> Result<Self> {
+        let rate_limit = *self
+            .rate_limit
+            .lock()
+            .map_err(|_| Error::Store("стеля швидкості HTTP отруєна".to_owned()))?;
+        let session = self
+            .session
+            .lock()
+            .map_err(|_| Error::Store("сесія HTTP отруєна".to_owned()))?
+            .clone();
+
+        Ok(Self {
+            client: self.client.clone(),
+            rate_limit: Mutex::new(rate_limit),
+            limiter: Arc::clone(&self.limiter),
+            session: Mutex::new(session),
+            parts,
+        })
+    }
 }
 
 #[async_trait::async_trait]
@@ -121,6 +146,23 @@ impl Protocol for HttpProtocol {
             final_url: info.final_url,
             variants: Vec::new(),
         })
+    }
+
+    fn supports_parallelism(&self) -> bool {
+        true
+    }
+
+    async fn run_with_parallelism(
+        &self,
+        ctx: RunContext,
+        parallelism: Option<usize>,
+        sink: &dyn ProgressSink,
+    ) -> Result<Option<ResumeBlob>> {
+        let Some(parts) = parallelism else {
+            return self.run(ctx, sink).await;
+        };
+        let scoped = self.для_паралельності(parts)?;
+        scoped.run(ctx, sink).await
     }
 
     async fn run(&self, ctx: RunContext, sink: &dyn ProgressSink) -> Result<Option<ResumeBlob>> {
@@ -273,6 +315,16 @@ mod tests {
 
     impl ProgressSink for Німий {
         fn report(&self, _: Progress) {}
+    }
+
+    #[test]
+    fn http_застосовує_паралельність_лише_до_копії_для_запуску() {
+        let protocol = HttpProtocol::new(8).unwrap();
+        let scoped = protocol.для_паралельності(3).unwrap();
+
+        assert!(protocol.supports_parallelism());
+        assert_eq!(protocol.parts, 8, "типова настройка не повинна змінитися");
+        assert_eq!(scoped.parts, 3, "запуск має отримати явне значення");
     }
 
     #[tokio::test]

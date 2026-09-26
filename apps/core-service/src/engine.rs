@@ -74,6 +74,11 @@ struct Live {
     /// Живе лише в пам'яті й лише для активних завдань: після завершення
     /// вона нікому не потрібна, а в базі роздувала б рядок.
     parts: Vec<downloader_core::protocol::PartProgress>,
+    /// Бажана паралельність саме цього завдання.
+    ///
+    /// Живе лише в пам'яті, як `session`, `max_duration` і `rewind`: після
+    /// рестарту повертається до типової настройки модуля.
+    parallelism: Option<usize>,
     /// Іменована черга.
     queue: String,
     /// Обмеження тривалості (для live-потоків).
@@ -294,6 +299,7 @@ impl Engine {
                 protocol: t.protocol,
                 targets,
                 parts: Vec::new(),
+                parallelism: None,
                 queue: t.queue,
                 max_duration: None,
                 rewind: false,
@@ -442,7 +448,7 @@ impl Engine {
         self: &Arc<Self>,
         url: &str,
         dest: Option<PathBuf>,
-        _parts: Option<usize>,
+        parts: Option<usize>,
         session: Session,
         variant: Option<String>,
         queue: Option<String>,
@@ -458,6 +464,15 @@ impl Engine {
         };
 
         let protocol_name = protocol.name().to_owned();
+
+        if parts == Some(0) {
+            anyhow::bail!("кількість з'єднань для {url} не може бути нулем");
+        }
+        if parts.is_some() && !protocol.supports_parallelism() {
+            anyhow::bail!(
+                "модуль {protocol_name} не підтримує задану кількість з'єднань для {url}"
+            );
+        }
 
         if let Some(id) = знайти_живе(&self.live, url) {
             anyhow::bail!("це посилання вже качається як завдання {id}");
@@ -605,6 +620,7 @@ impl Engine {
                     targets: targets.clone(),
                     variant: variant.clone(),
                     parts: Vec::new(),
+                    parallelism: parts,
                     queue: actual_queue.clone(),
                     max_duration,
                     rewind,
@@ -624,6 +640,7 @@ impl Engine {
                 actual_queue,
                 max_duration,
                 rewind,
+                parts,
             );
         } else {
             self.set_status(id, Status::Queued, None);
@@ -650,6 +667,7 @@ impl Engine {
         queue_name: String,
         max_duration: Option<std::time::Duration>,
         rewind: bool,
+        parallelism: Option<usize>,
     ) {
         tokio::spawn(async move {
             let Some(module) = self.registry.by_name(&protocol) else {
@@ -715,7 +733,10 @@ impl Engine {
                 rewind,
             };
 
-            match module.run(ctx.clone(), &sink).await {
+            match module
+                .run_with_parallelism(ctx.clone(), parallelism, &sink)
+                .await
+            {
                 // Непорожня відповідь означає «зупинено на прохання»: це не
                 // завершення й не помилка.
                 Ok(Some(_resume)) => {
@@ -846,6 +867,7 @@ impl Engine {
                     task.queue.clone(),
                     task.max_duration,
                     task.rewind,
+                    task.parallelism,
                 )
             };
 
@@ -859,6 +881,7 @@ impl Engine {
                 queue_name,
                 max_duration,
                 rewind,
+                parallelism,
             ) = job;
             self.set_status(id, Status::Running, None);
             self.clone().spawn_download(
@@ -871,6 +894,7 @@ impl Engine {
                 queue_name,
                 max_duration,
                 rewind,
+                parallelism,
             );
         }
     }
@@ -1533,6 +1557,7 @@ mod tests {
             protocol: "http".into(),
             targets: vec![],
             parts: Vec::new(),
+            parallelism: None,
             queue: downloader_core::store::DEFAULT_QUEUE.to_owned(),
             max_duration: None,
             rewind: false,

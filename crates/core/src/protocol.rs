@@ -424,6 +424,36 @@ pub trait Protocol: Send + Sync {
     /// там, де людина просто натиснула паузу.
     async fn run(&self, ctx: RunContext, sink: &dyn ProgressSink) -> Result<Option<ResumeBlob>>;
 
+    /// Чи вміє модуль виконати явне обмеження паралельності для одного
+    /// завдання.
+    ///
+    /// Типово — ні: краще чесно відмовити, ніж мовчки проігнорувати вибір
+    /// людини. Значення передається окремо від [`RunContext`], щоб не ламати
+    /// наявні модулі, яким така настройка не потрібна.
+    fn supports_parallelism(&self) -> bool {
+        false
+    }
+
+    /// Запустити завдання з бажаною паралельністю.
+    ///
+    /// `None` зберігає типову поведінку модуля. Модуль, який підтримує
+    /// настройку, перевизначає цей метод і застосовує значення лише до
+    /// поточного запуску.
+    async fn run_with_parallelism(
+        &self,
+        ctx: RunContext,
+        parallelism: Option<usize>,
+        sink: &dyn ProgressSink,
+    ) -> Result<Option<ResumeBlob>> {
+        if let Some(value) = parallelism {
+            return Err(crate::error::Error::Store(format!(
+                "модуль {} не підтримує задану паралельність {value}",
+                self.name()
+            )));
+        }
+        self.run(ctx, sink).await
+    }
+
     /// Обмежити швидкість цього завдання.
     ///
     /// За замовчуванням — чесне «не вмію»: краще, ніж мовчки проігнорувати.
@@ -785,6 +815,38 @@ mod tests {
         let вміє = Пустушка::нова("вигадка", "вигадка://", 1);
         assert_eq!(вміє.set_rate_limit(5000), RateLimitSupport::Applied);
         assert_eq!(*вміє.обмеження.lock().unwrap(), Some(5000));
+    }
+
+    #[tokio::test]
+    async fn модуль_без_підтримки_не_ігнорує_явну_паралельність() {
+        let модуль = Пустушка::нова("вигадка", "вигадка://", 1);
+        let контекст = RunContext {
+            task_id: 7,
+            source: "вигадка://файл".to_owned(),
+            targets: vec![PathBuf::from("файл.bin")],
+            resume: None,
+            cancel: Cancel::new(),
+            session: Session::default(),
+            variant: None,
+            limiter: None,
+            max_duration: None,
+            rewind: false,
+        };
+        let збирач = Збирач::default();
+
+        let err = модуль
+            .run_with_parallelism(контекст.clone(), Some(4), &збирач)
+            .await
+            .expect_err("явну паралельність не можна мовчки ігнорувати");
+        assert!(err.to_string().contains("не підтримує"), "{err}");
+
+        assert!(
+            модуль
+                .run_with_parallelism(контекст, None, &збирач)
+                .await
+                .is_ok(),
+            "без явного значення має діяти звичайний run"
+        );
     }
 
     #[test]
