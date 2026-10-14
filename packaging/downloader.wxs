@@ -93,6 +93,20 @@
             KeyPath="yes" />
       </Component>
 
+      <!--
+        Журнал змін і політика підпису їдуть разом із програмою, а не лише
+        лежать у репозиторії. Журнал відповідає на питання «що мені дала ця
+        версія» тому, хто ніколи не відкриє GitHub; політика пояснює, чому
+        пакет не підписаний — людині, яку щойно налякав SmartScreen.
+      -->
+      <Component Id="ChangelogFile">
+        <File Id="CHANGELOG.txt" Source="$(var.RootDir)\CHANGELOG.txt" KeyPath="yes" />
+      </Component>
+
+      <Component Id="SigningPolicyFile">
+        <File Id="SIGNING.POLICY.txt" Source="$(var.RootDir)\SIGNING-POLICY.txt" KeyPath="yes" />
+      </Component>
+
       <Component Id="CoreExe">
         <File Source="$(var.ReleaseDir)\downloader-core.exe" KeyPath="yes" />
       </Component>

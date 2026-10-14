@@ -552,6 +552,7 @@ impl Registry {
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,
+    clippy::expect_used,
     reason = "у тестах падіння — це і є повідомлення про помилку"
 )]
 mod tests {

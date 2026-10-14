@@ -81,6 +81,18 @@ dl watch
 
 Language: `dl --lang en …` or `DOWNLOADER_LANG=en`. The default is Ukrainian.
 
+When something goes wrong:
+
+```
+dl logs
+dl logs --path
+```
+
+The core **always** writes a log, to `logs\downloader-core.log` next to the
+database, rotating the file once it reaches 5 MB. This is not a flag for
+experts: the core lives in the tray and starts with the session, so without a
+file the cause of a failure would vanish along with the console nobody sees.
+
 ## Building
 
 ```

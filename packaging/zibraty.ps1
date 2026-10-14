@@ -164,7 +164,18 @@ foreach ($item in $зібрані) {
     $leafName = Split-Path $item.Шлях -Leaf
     $hashLines += "$hash  $leafName"
 }
-[System.IO.File]::WriteAllLines($checksumFile, [string[]]$hashLines, [System.Text.UTF8Encoding]::new($false))
+# ⚠️ Саме WriteAllText із явним "`n", а не WriteAllLines: той бере
+# Environment.NewLine, тобто CRLF на Windows. Людина, яка зробить
+# `sha256sum -c SHA256SUMS.txt` — рівно так, як радить README, — отримає
+# «FAILED open or read»: \r прилипає до імені файлу, і такого файлу немає.
+# Перевірено на опублікованому v0.1.0, де файл вийшов саме з CRLF.
+$checksumText = ($hashLines -join "`n") + "`n"
+[System.IO.File]::WriteAllText($checksumFile, $checksumText, [System.Text.UTF8Encoding]::new($false))
+
+$перевірка = [System.IO.File]::ReadAllBytes($checksumFile)
+if ($перевірка -contains 13) {
+    throw "SHA256SUMS.txt містить CR — sha256sum -c його не прочитає"
+}
 Write-Host "→ контрольні суми збережено у $checksumFile" -ForegroundColor Cyan
 
 Write-Host ""

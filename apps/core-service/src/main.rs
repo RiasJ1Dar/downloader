@@ -54,13 +54,23 @@ struct Cli {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info".into()),
-        )
-        .init();
+    // Помилка старту мусить лишити слід у журналі, а не лише в stderr.
+    //
+    // Ядро запускається з автозапуску, без консолі: коли воно не піднімається
+    // — скажімо, канал уже зайнятий іншим екземпляром, — людина бачить, що
+    // програми просто немає. Текст `Error: не вдалося зайняти канал…` іде в
+    // нікуди, а в журналі лишається самий лише рядок про те, що журнал
+    // ведеться. Саме так виглядала ця вада до виправлення.
+    match запустити().await {
+        Ok(()) => Ok(()),
+        Err(e) => {
+            tracing::error!(помилка = %format!("{e:#}"), "ядро не запустилося");
+            Err(e)
+        }
+    }
+}
 
+async fn запустити() -> anyhow::Result<()> {
     let cli = Cli::parse();
     i18n::init(cli.lang.as_deref());
     let ставити_nmhost = cli.pipe.is_none();
@@ -78,6 +88,37 @@ async fn main() -> anyhow::Result<()> {
         .unwrap_or_else(|| downloader_winutil::data_dir_for_exe(exe.as_deref()));
     std::fs::create_dir_all(&data_dir)
         .with_context(|| format!("не вдалося створити теку даних {}", data_dir.display()))?;
+
+    // Журнал вмикається аж тут, бо до розбору аргументів невідомо, де тека
+    // даних: у портативному режимі вона поруч із програмою, у звичайному — у
+    // профілі. Кілька перших рядків (розбір аргументів) через це в файл не
+    // потрапляють — зате файл завжди лежить там, де його шукатиме людина.
+    let шлях_журналу = downloader_winutil::zhurnal::файл_журналу(&data_dir);
+    let фільтр = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| "info".into());
+    match downloader_winutil::zhurnal::Журнал::відкрити(&шлях_журналу) {
+        Ok(журнал) => {
+            use tracing_subscriber::fmt::writer::MakeWriterExt as _;
+            // Стелю лишаємо: консоль потрібна тому, хто запустив ядро руками.
+            let пише = std::io::stderr.and(move || журнал.clone());
+            tracing_subscriber::fmt()
+                .with_env_filter(фільтр)
+                .with_ansi(false)
+                .with_writer(пише)
+                .init();
+            tracing::info!(файл = %шлях_журналу.display(), "журнал ведеться");
+        }
+        Err(e) => {
+            // Диск лише для читання, немає прав, зайнятий файл — програма має
+            // працювати далі, але людина мусить знати, що слідів не буде.
+            tracing_subscriber::fmt().with_env_filter(фільтр).init();
+            tracing::warn!(
+                файл = %шлях_журналу.display(),
+                помилка = %e,
+                "журнал у файл не ведеться — лишається тільки консоль"
+            );
+        }
+    }
 
     let db = cli.db.unwrap_or_else(|| data_dir.join("tasks.db"));
     let downloads = cli

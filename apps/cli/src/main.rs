@@ -302,6 +302,17 @@ enum Command {
         shell: ShellType,
     },
 
+    /// Показати журнал ядра: де лежить і що в ньому останнє.
+    Logs {
+        /// Скільки останніх рядків показати.
+        #[arg(long, default_value_t = 50)]
+        tail: usize,
+
+        /// Надрукувати лише шлях до файлу — зручно для `notepad $(dl logs --path)`.
+        #[arg(long)]
+        path: bool,
+    },
+
     /// Перевірити наявність оновлень програми (тільки перевірка, без тихих інсталяцій).
     Update {
         /// Тільки перевірити наявність оновлень і звірити хеші (типово увімкнено).
@@ -432,6 +443,39 @@ async fn main() -> Result<()> {
         Command::Completions { shell } => {
             let mut cmd = Cli::command();
             clap_complete::generate(shell.to_shell(), &mut cmd, "dl", &mut std::io::stdout());
+        }
+
+        Command::Logs { tail, path } => {
+            // Шлях рахуємо тією самою функцією, що й ядро, а не повторюємо
+            // його рядком: інакше в портативному режимі CLI показував би
+            // профіль, тоді як журнал лежить поруч із програмою.
+            let exe = std::env::current_exe().ok();
+            let тека = downloader_winutil::data_dir_for_exe(exe.as_deref());
+            let файл = downloader_winutil::zhurnal::файл_журналу(&тека);
+
+            println!("{}", файл.display());
+            if path {
+                return Ok(());
+            }
+
+            match std::fs::read_to_string(&файл) {
+                Ok(вміст) => {
+                    let рядки: Vec<&str> = вміст.lines().collect();
+                    if рядки.is_empty() {
+                        println!("(журнал порожній)");
+                    }
+                    let від = рядки.len().saturating_sub(tail);
+                    for рядок in &рядки[від..] {
+                        println!("{рядок}");
+                    }
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    println!("(файлу ще немає — ядро жодного разу не запускалося)");
+                }
+                Err(e) => {
+                    eprintln!("журнал не читається: {e}");
+                }
+            }
         }
 
         Command::Update {

@@ -21,6 +21,7 @@ pub mod motw;
 pub mod names;
 pub mod paths;
 pub mod power;
+pub mod zhurnal;
 
 pub use clipboard::{ClipboardError, текст_буфера};
 pub use disk::{DiskError, вільні_байти, вистачить_місця};
