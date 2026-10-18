@@ -20,10 +20,12 @@ use std::sync::{Arc, Mutex};
 use downloader_core::state::{self, DownloadState, LoadError};
 use downloader_core::{RateLimiter, SegmentId, SegmentTable, SparseFile};
 use futures_util::StreamExt;
-use reqwest::header::{IF_RANGE, RANGE};
+use reqwest::header::{
+    ACCEPT_ENCODING, CONTENT_LENGTH, CONTENT_RANGE, ETAG, HeaderMap, IF_RANGE, LAST_MODIFIED, RANGE,
+};
 use reqwest::{Client, StatusCode};
 
-use crate::headers::Validator;
+use crate::headers::{ContentRange, Validator};
 use crate::probe::{Probe, ProbeError, apply_session, probe_with_session};
 use downloader_core::protocol::Session;
 
@@ -136,6 +138,20 @@ pub enum DownloadError {
     #[error("сервер відповів {status} на сегмент {segment}")]
     BadStatus { segment: SegmentId, status: u16 },
 
+    #[error("сервер віддав неправильний діапазон для сегмента {segment} від {url}: {detail}")]
+    InvalidRange {
+        url: String,
+        segment: SegmentId,
+        detail: String,
+    },
+
+    #[error("не вдалося зберегти стан докачування для {path}: {source}")]
+    Checkpoint {
+        path: PathBuf,
+        #[source]
+        source: downloader_core::Error,
+    },
+
     #[error("сегмент {segment} обірвався {attempts} разів поспіль: {source}")]
     TooManyRetries {
         segment: SegmentId,
@@ -157,6 +173,7 @@ const PROTOCOL: &str = "http";
 /// Спільний стан усіх воркерів одного завантаження.
 struct Shared {
     url: String,
+    expected_size: Option<u64>,
     file: SparseFile,
     validator: Validator,
     /// Чи можна докачати з місця обриву.
@@ -216,6 +233,32 @@ pub async fn download_with_probe(
     dest: &Path,
     opts: &Options,
 ) -> Result<Outcome, DownloadError> {
+    let mut current = opts.clone();
+    loop {
+        match download_attempt(client, info, dest, &current).await {
+            Err(DownloadError::BadStatus {
+                status: 429 | 503, ..
+            }) if info.resumable && current.parts > 1 => {
+                // Спершу звичайні retries, потім менша паралельність.
+                // Checkpoint попередньої спроби зберігає отримані частини;
+                // зміна ресурсу ніколи не потрапляє у цей fallback.
+                current.parts = (current.parts / 2).max(1);
+                tracing::warn!(
+                    parts = current.parts,
+                    "сервер обмежує з'єднання — повторюю з меншою паралельністю"
+                );
+            }
+            result => return result,
+        }
+    }
+}
+
+async fn download_attempt(
+    client: &Client,
+    info: &Probe,
+    dest: &Path,
+    opts: &Options,
+) -> Result<Outcome, DownloadError> {
     let parts = info.usable_parts(opts.parts);
     let fingerprint = info.validator.if_range_value().map(str::to_owned);
 
@@ -233,6 +276,7 @@ pub async fn download_with_probe(
 
     let shared = Arc::new(Shared {
         url: info.final_url.clone(),
+        expected_size: info.size,
         file,
         validator: info.validator.clone(),
         resumable: info.resumable,
@@ -267,9 +311,7 @@ pub async fn download_with_probe(
                 failure.get_or_insert(e);
             }
             Err(join) => {
-                failure.get_or_insert(DownloadError::Internal(format!(
-                    "воркер зірвався: {join}"
-                )));
+                failure.get_or_insert(DownloadError::Internal(format!("воркер зірвався: {join}")));
             }
         }
     }
@@ -284,7 +326,9 @@ pub async fn download_with_probe(
     if let Some(err) = failure {
         // Качання не вдалося — але те, що вже на диску, має вціліти разом зі
         // станом: наступна спроба продовжить, а не почне з нуля.
-        checkpoint(&shared);
+        if let Err(error) = checkpoint(&shared) {
+            tracing::error!(%error, "стан після збою не збережено");
+        }
         return Err(err);
     }
 
@@ -317,6 +361,12 @@ fn resume_or_start(
         Ok(saved) => {
             if let Err(why) = saved.accepts(PROTOCOL, &info.final_url, info.size, fingerprint) {
                 tracing::info!(%why, "стан не підійшов, качаємо з нуля");
+                return fresh();
+            }
+            if fingerprint.is_none() && saved.downloaded() > 0 {
+                tracing::warn!(
+                    "сервер не дав валідатора версії — старий прогрес не можна безпечно доклеїти, починаю з нуля"
+                );
                 return fresh();
             }
             let already = saved.downloaded();
@@ -399,6 +449,9 @@ fn checkpoint_step(shared: &Shared, last_done: u64) -> u64 {
         }
         if let Err(e) = state::save(&shared.dest, &snapshot) {
             tracing::warn!(error = %e, "не вдалося зберегти стан завантаження");
+            // Не підтверджуємо незбережений прогрес: наступний тик має
+            // повторити запис навіть без жодного нового байта з мережі.
+            return last_done;
         }
         done
     } else {
@@ -411,8 +464,28 @@ fn checkpoint_step(shared: &Shared, last_done: u64) -> u64 {
 /// ⚠️ Порядок не міняти. Якщо записати стан раніше за `sync`, після падіння
 /// живлення стан казатиме «завантажено», а байтів не буде — і докачування
 /// піде з дірки, якої ніхто не помітить.
-fn checkpoint(shared: &Shared) {
-    checkpoint_step(shared, 0);
+fn checkpoint(shared: &Shared) -> Result<(), DownloadError> {
+    let state = shared
+        .state
+        .lock()
+        .map_err(|_| DownloadError::Internal("стан завантаження отруєно".into()))?;
+    let snapshot = shared.resumable.then(|| {
+        DownloadState::from_table(
+            PROTOCOL,
+            &shared.url,
+            &state.table,
+            shared.fingerprint.clone(),
+        )
+    });
+    drop(state);
+    shared.file.sync()?;
+    if let Some(snapshot) = snapshot {
+        state::save(&shared.dest, &snapshot).map_err(|source| DownloadError::Checkpoint {
+            path: shared.dest.clone(),
+            source,
+        })?;
+    }
+    Ok(())
 }
 
 /// Один воркер: бере завдання, доки вони є.
@@ -512,7 +585,12 @@ async fn fetch_segment(
                 }
 
                 let pause = std::time::Duration::from_millis(200 * u64::from(attempt + 1));
-                tokio::time::sleep(pause).await;
+                if until_cancelled(shared, tokio::time::sleep(pause))
+                    .await
+                    .is_none()
+                {
+                    return Ok(());
+                }
             }
 
             Err(other) => return Err(other),
@@ -528,14 +606,17 @@ async fn pull(
     from: u64,
     to: u64,
 ) -> Result<(), DownloadError> {
-    let mut req = apply_session(client.get(&shared.url), &shared.opts.session);
+    let mut req = apply_session(client.get(&shared.url), &shared.opts.session, &shared.url)
+        .header(ACCEPT_ENCODING, "identity");
 
     // Межа в HTTP включна, тому `to - 1`. Нескінченний хвіст (`to` = MAX)
     // просимо відкритим діапазоном.
-    if to == u64::MAX {
-        req = req.header(RANGE, format!("bytes={from}-"));
-    } else {
-        req = req.header(RANGE, format!("bytes={from}-{}", to - 1));
+    if shared.resumable {
+        if to == u64::MAX {
+            req = req.header(RANGE, format!("bytes={from}-"));
+        } else {
+            req = req.header(RANGE, format!("bytes={from}-{}", to - 1));
+        }
     }
 
     // `If-Range` на **кожному** запиті: ресурс міг змінитись і посеред
@@ -544,36 +625,38 @@ async fn pull(
         req = req.header(IF_RANGE, v);
     }
 
-    let resp = req
-        .send()
-        .await
-        .map_err(|source| DownloadError::TooManyRetries {
-            segment: id,
-            attempts: 1,
-            source,
-        })?;
+    let Some(response) = until_cancelled(shared, req.send()).await else {
+        return Ok(());
+    };
+    let resp = response.map_err(|source| DownloadError::TooManyRetries {
+        segment: id,
+        attempts: 1,
+        source,
+    })?;
 
     let status = resp.status();
 
     // `200` там, де ми просили діапазон, означає одне з двох: сервер
     // ігнорує `Range` (тоді ми качаємо з нуля одним сегментом), або ресурс
     // змінився і `If-Range` не збігся. Друге — привід зупинитись.
-    if status == StatusCode::OK && from > 0 {
+    if status == StatusCode::OK && (shared.resumable || from > 0) {
         return Err(DownloadError::ResourceChanged {
             url: shared.url.clone(),
         });
     }
-    if !(status.is_success() || status == StatusCode::PARTIAL_CONTENT) {
+    if !(status == StatusCode::OK || status == StatusCode::PARTIAL_CONTENT) {
         return Err(DownloadError::BadStatus {
             segment: id,
             status: status.as_u16(),
         });
     }
 
+    validate_range(shared, id, status, resp.headers(), from, to)?;
+
     let mut offset = from;
     let mut stream = resp.bytes_stream();
 
-    while let Some(chunk) = stream.next().await {
+    while let Some(Some(chunk)) = until_cancelled(shared, stream.next()).await {
         let chunk = match chunk {
             Ok(c) => c,
 
@@ -615,9 +698,7 @@ async fn pull(
         }
 
         let room = seg.end - offset;
-        let take = usize::try_from(room)
-            .unwrap_or(usize::MAX)
-            .min(chunk.len());
+        let take = usize::try_from(room).unwrap_or(usize::MAX).min(chunk.len());
         let piece = &chunk[..take];
 
         if piece.is_empty() {
@@ -638,14 +719,21 @@ async fn pull(
 
         let mut left = piece;
         while !left.is_empty() {
+            if shared.is_cancelled() {
+                return Ok(());
+            }
             // Ліміт швидкості питаємо **поза локом**: усередині є пауза, а
             // спати з захопленим м'ютексом означало б зупинити всіх воркерів
             // разом із собою.
             let allowance = shared.limiter.take(left.len() as u64);
 
             if allowance.allowed == 0 {
-                if let Some(pause) = allowance.wait {
-                    tokio::time::sleep(pause).await;
+                if let Some(pause) = allowance.wait
+                    && until_cancelled(shared, tokio::time::sleep(pause))
+                        .await
+                        .is_none()
+                {
+                    return Ok(());
                 }
                 continue;
             }
@@ -713,6 +801,9 @@ async fn pull(
     // Тіло скінчилось, а сегмент — ні. Це не «просто кінець»: так виглядає
     // сервер, який збрехав у `Content-Length`. Мовчки прийняти — значить
     // віддати людині файл із діркою.
+    if shared.is_cancelled() {
+        return Ok(());
+    }
     let missing = snapshot(shared, id).map_or(0, |s| s.end.saturating_sub(offset));
     if missing > 0 && to != u64::MAX {
         return Err(DownloadError::ShortBody {
@@ -722,6 +813,86 @@ async fn pull(
         });
     }
 
+    Ok(())
+}
+
+/// Не чекаємо завислих headers/body або довгої паузи limiter після cancel.
+async fn until_cancelled<T>(
+    shared: &Shared,
+    future: impl std::future::Future<Output = T>,
+) -> Option<T> {
+    tokio::pin!(future);
+    loop {
+        if shared.is_cancelled() {
+            return None;
+        }
+        tokio::select! {
+            result = &mut future => return Some(result),
+            () = tokio::time::sleep(std::time::Duration::from_millis(50)) => {}
+        }
+    }
+}
+
+/// Усі перевірки — до першого запису тіла у partial file.
+fn validate_range(
+    shared: &Shared,
+    segment: SegmentId,
+    status: StatusCode,
+    headers: &HeaderMap,
+    from: u64,
+    to: u64,
+) -> Result<(), DownloadError> {
+    if status != StatusCode::PARTIAL_CONTENT {
+        return Ok(());
+    }
+    let invalid = |detail: String| DownloadError::InvalidRange {
+        url: shared.url.clone(),
+        segment,
+        detail,
+    };
+    let cr = headers
+        .get(CONTENT_RANGE)
+        .and_then(|h| h.to_str().ok())
+        .and_then(ContentRange::parse)
+        .ok_or_else(|| invalid("немає коректного Content-Range у відповіді 206".into()))?;
+    if cr.start != from || (to != u64::MAX && cr.end != to - 1) {
+        return Err(invalid(format!(
+            "очікували bytes {from}-{}, отримали {}-{}",
+            to.saturating_sub(1),
+            cr.start,
+            cr.end
+        )));
+    }
+    if let Some(total) = shared.expected_size
+        && cr.total != Some(total)
+    {
+        return Err(invalid(format!(
+            "очікували повний розмір {total}, отримали {:?}",
+            cr.total
+        )));
+    }
+    if let Some(length) = headers.get(CONTENT_LENGTH) {
+        let length = length.to_str().ok().and_then(|v| v.parse::<u64>().ok());
+        if length != Some(cr.len()) {
+            return Err(invalid(
+                "Content-Length не збігається з межами Content-Range".into(),
+            ));
+        }
+    }
+    let changed = match &shared.validator {
+        Validator::Strong(expected) => headers
+            .get(ETAG)
+            .is_some_and(|actual| actual != expected.as_str()),
+        Validator::LastModified(expected) => headers
+            .get(LAST_MODIFIED)
+            .is_some_and(|actual| actual != expected.as_str()),
+        Validator::None => false,
+    };
+    if changed {
+        return Err(DownloadError::ResourceChanged {
+            url: shared.url.clone(),
+        });
+    }
     Ok(())
 }
 
@@ -748,7 +919,7 @@ fn finish(shared: &Arc<Shared>, info: &Probe) -> Result<Outcome, DownloadError> 
         // запуск продовжив. Обрізати файл тут було б катастрофою —
         // зарезервоване місце зникло б разом із можливістю докачати.
         drop(state);
-        checkpoint(shared);
+        checkpoint(shared)?;
 
         return Ok(Outcome {
             path: shared.file.path().to_path_buf(),
@@ -778,4 +949,76 @@ fn finish(shared: &Arc<Shared>, info: &Probe) -> Result<Outcome, DownloadError> 
         segments,
         cancelled: false,
     })
+}
+
+#[cfg(test)]
+#[expect(clippy::unwrap_used, reason = "у тесті падіння є діагностикою")]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn невдалий_checkpoint_повторюється_без_нових_байтів() {
+        let dir = std::env::temp_dir().join(format!(
+            "dl-checkpoint-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&dir).unwrap();
+        let dest = dir.join("payload.bin");
+        let file = SparseFile::create(&dest, Some(8)).unwrap();
+        file.write_all_at(0, b"test").unwrap();
+        let mut table = SegmentTable::single(8);
+        let id = table.segments()[0].id;
+        table.reserve_write(id, 4).unwrap();
+        table.commit_write(id, 4).unwrap();
+        let shared = Shared {
+            url: "https://example.test/file".into(),
+            expected_size: Some(8),
+            file,
+            validator: Validator::None,
+            resumable: true,
+            dest: dest.clone(),
+            fingerprint: None,
+            limiter: Arc::new(RateLimiter::new(0)),
+            opts: Options::default(),
+            state: Mutex::new(State {
+                table,
+                pending: vec![],
+            }),
+        };
+
+        // Існуючий каталог замість sidecar детерміновано ламає rename.
+        let sidecar = state::state_path(&dest);
+        std::fs::create_dir(&sidecar).unwrap();
+        let acknowledged = checkpoint_step(&shared, 0);
+        assert_eq!(acknowledged, 0, "невдалий save не підтверджує 4 bytes");
+        assert!(matches!(
+            checkpoint(&shared),
+            Err(DownloadError::Checkpoint { .. })
+        ));
+        std::fs::remove_dir(&sidecar).unwrap();
+        assert_eq!(checkpoint_step(&shared, acknowledged), 4);
+        assert_eq!(state::load(&dest).unwrap().downloaded(), 4);
+        let probe = Probe {
+            final_url: shared.url.clone(),
+            size: Some(8),
+            resumable: true,
+            declared: crate::headers::RangeSupport::Bytes,
+            validator: Validator::None,
+            disposition_name: None,
+        };
+        let fresh = resume_or_start(&probe, &dest, 1, &Options::default(), None);
+        assert_eq!(
+            fresh.downloaded(),
+            0,
+            "без валідатора старий partial не доклеюється"
+        );
+        drop(shared);
+        std::fs::remove_file(&sidecar).unwrap();
+        std::fs::remove_file(&dest).unwrap();
+        std::fs::remove_dir(&dir).unwrap();
+    }
 }

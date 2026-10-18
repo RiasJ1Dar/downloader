@@ -849,7 +849,7 @@ async fn fetch_range_limited(
         return Ok(Vec::new());
     }
     let end = start.saturating_add(length).saturating_sub(1);
-    let resp = apply_session(client.get(url), session)
+    let resp = apply_session(client.get(url), session, url)
         .header(reqwest::header::RANGE, format!("bytes={start}-{end}"))
         .send()
         .await
@@ -902,7 +902,7 @@ async fn fetch_segment_limited(
         if cancel.is_cancelled() {
             return Ok(Vec::new());
         }
-        let req = apply_session(client.get(url), session);
+        let req = apply_session(client.get(url), session, url);
         let resp = match req.send().await {
             Ok(r) => r,
             Err(e) => {
@@ -1044,7 +1044,7 @@ fn знайти_доріжку<'a>(доріжки: &'a [Доріжка], dest: &
 }
 
 async fn fetch_text(client: &Client, url: &str, session: &Session) -> Result<String> {
-    let resp = apply_session(client.get(url), session)
+    let resp = apply_session(client.get(url), session, url)
         .send()
         .await
         .map_err(|e| Error::Store(format!("GET {url}: {e}")))?;
@@ -1058,7 +1058,7 @@ async fn fetch_text(client: &Client, url: &str, session: &Session) -> Result<Str
 }
 
 async fn fetch_bytes(client: &Client, url: &str, session: &Session) -> Result<Vec<u8>> {
-    let resp = apply_session(client.get(url), session)
+    let resp = apply_session(client.get(url), session, url)
         .send()
         .await
         .map_err(|e| Error::Store(format!("GET {url}: {e}")))?;

@@ -4,6 +4,10 @@
     "message": "Sends downloads to the Downloader core. No local HTTP port."
   },
   "btnDownload": { "message": "Download" },
+  "btnSending": { "message": "Sending…" },
+  "mediaChoice": { "message": "Choose a media stream" },
+  "downloadAdded": { "message": "Added to Downloader" },
+  "downloadFailed": { "message": "Could not send. Please try again." },
   "ctxLink": { "message": "Download link with Downloader" },
   "ctxPage": { "message": "Download this page with Downloader" },
   "ctxMedia": { "message": "Download media with Downloader" }

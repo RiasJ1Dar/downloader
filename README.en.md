@@ -99,7 +99,13 @@ file the cause of a failure would vanish along with the console nobody sees.
 cargo build --workspace
 cargo test --workspace
 cargo clippy --workspace --all-targets
+node --test ext/tests/*.test.cjs
 ```
+
+Browser tests require Node.js 22. Run `git pull --ff-only` before working
+and a normal `git push` after verification. If histories diverge, compare
+the commits first; do not rewrite shared `master` with force pushes or
+cherry-pick the same changes again.
 
 The window (.NET 10 SDK required):
 

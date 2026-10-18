@@ -23,6 +23,34 @@ use serde::{Deserialize, Serialize};
 /// відмову з поясненням, а не загадкову поведінку через півгодини роботи.
 pub const PROTOCOL_VERSION: u32 = 1;
 
+/// Додатковий, сумісний зі старим Add шлях для браузерного контексту.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BrowserRequestContext {
+    pub version: u32,
+    pub source_url: String,
+    #[serde(default)]
+    pub page_url: Option<String>,
+    pub method: String,
+    #[serde(default)]
+    pub user_agent: Option<String>,
+    #[serde(default)]
+    pub headers: Vec<(String, String)>,
+    #[serde(default)]
+    pub cookies: Option<String>,
+    #[serde(default)]
+    pub referer: Option<String>,
+}
+
+impl std::fmt::Debug for BrowserRequestContext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BrowserRequestContext")
+            .field("version", &self.version)
+            .field("values", &"приховано")
+            .finish()
+    }
+}
+
 /// Ім'я каналу, на якому слухає ядро.
 #[cfg(windows)]
 pub const PIPE_NAME: &str = r"\\.\pipe\downloader-core";
@@ -35,6 +63,11 @@ pub const PIPE_NAME: &str = "/tmp/downloader-core.sock";
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Request {
+    /// Браузерний запит із прив'язкою заголовків до початкового ресурсу.
+    AddBrowser {
+        url: String,
+        context: Box<BrowserRequestContext>,
+    },
     /// Рукостискання. Має бути першим повідомленням.
     Hello {
         /// Хто прийшов: `cli`, `ui`, `nmhost`. Для журналу.
@@ -265,11 +298,7 @@ pub enum Event {
 
     /// Завдання завершилось. Окремою подією, бо на неї реагують
     /// післядіями: відкрити теку, вимкнути комп'ютер.
-    Finished {
-        id: i64,
-        path: String,
-        bytes: u64,
-    },
+    Finished { id: i64, path: String, bytes: u64 },
 
     /// Завдання впало.
     Failed { id: i64, message: String },
@@ -403,7 +432,13 @@ mod tests {
 
         let back: Request = serde_json::from_str(&json).unwrap();
         match back {
-            Request::Add { url, parts, cookies, referer, .. } => {
+            Request::Add {
+                url,
+                parts,
+                cookies,
+                referer,
+                ..
+            } => {
                 assert_eq!(url, "https://e.com/звіт.pdf");
                 assert_eq!(parts, Some(8));
                 assert!(cookies.is_none());
@@ -461,7 +496,11 @@ mod tests {
         let back: Request = serde_json::from_str(&json).unwrap();
         match back {
             Request::Add {
-                cookies, referer, duration, rewind, ..
+                cookies,
+                referer,
+                duration,
+                rewind,
+                ..
             } => {
                 assert_eq!(cookies.as_deref(), Some("n=v; n2=v2"));
                 assert_eq!(referer.as_deref(), Some("https://e.com/page"));
@@ -608,7 +647,11 @@ mod tests {
 
         let back: Request = serde_json::from_str(&json).unwrap();
         match back {
-            Request::QueueCreate { name, max_concurrent, .. } => {
+            Request::QueueCreate {
+                name,
+                max_concurrent,
+                ..
+            } => {
                 assert_eq!(name, "night");
                 assert_eq!(max_concurrent, Some(4));
             }

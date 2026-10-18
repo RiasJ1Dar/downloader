@@ -4,6 +4,10 @@
     "message": "Перехоплює завантаження і віддає ядру Downloader. Без локального HTTP-порту."
   },
   "btnDownload": { "message": "Завантажити" },
+  "btnSending": { "message": "Передаю…" },
+  "mediaChoice": { "message": "Оберіть медіапотік" },
+  "downloadAdded": { "message": "Додано в Downloader" },
+  "downloadFailed": { "message": "Не вдалося передати. Спробуйте ще раз." },
   "ctxLink": { "message": "Завантажити посилання в Downloader" },
   "ctxPage": { "message": "Завантажити сторінку в Downloader" },
   "ctxMedia": { "message": "Завантажити медіа в Downloader" }

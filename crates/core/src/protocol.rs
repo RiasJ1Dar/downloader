@@ -55,6 +55,68 @@ pub struct Session {
     pub cookies: Option<String>,
     /// Заголовок `Referer`, якщо є.
     pub referer: Option<String>,
+    /// Версійований контекст браузерного запиту; секрети — у Session.
+    pub context: Option<BrowserRequestContext>,
+}
+
+/// Контекст повторюваного запиту. POST навмисно не відтворюємо як GET:
+/// повтор probe/run може двічі виконати операцію на стороні сервера.
+#[derive(Clone, PartialEq, Eq)]
+pub struct BrowserRequestContext {
+    pub version: u32,
+    pub source_url: String,
+    pub page_url: Option<String>,
+    pub method: String,
+    pub user_agent: Option<String>,
+    pub headers: Vec<(String, String)>,
+}
+
+impl BrowserRequestContext {
+    /// Перевірити до будь-яких звернень до мережі, без друку значень.
+    pub fn validate(&self, source: &str) -> std::result::Result<(), String> {
+        if self.version != 1 {
+            return Err(format!(
+                "непідтримувана версія браузерного контексту: {}",
+                self.version
+            ));
+        }
+        if self.method != "GET" {
+            return Err("цей метод запиту треба залишити браузеру: підтримується лише GET".into());
+        }
+        if self.source_url != source {
+            return Err("контекст браузера належить іншому посиланню".into());
+        }
+        let safe = |v: &str| v.len() <= 16384 && !v.contains(['\r', '\n', '\0']);
+        if !safe(&self.source_url)
+            || self.page_url.as_deref().is_some_and(|v| !safe(v))
+            || self.user_agent.as_deref().is_some_and(|v| !safe(v))
+            || self.headers.len() > 16
+        {
+            return Err("браузерний контекст завеликий або містить керувальні символи".into());
+        }
+        for (name, value) in &self.headers {
+            if !["accept", "accept-language", "origin"]
+                .iter()
+                .any(|n| name.eq_ignore_ascii_case(n))
+                || !safe(value)
+            {
+                return Err(
+                    "браузерний контекст містить недозволений заголовок або його значення".into(),
+                );
+            }
+        }
+        Ok(())
+    }
+}
+
+impl std::fmt::Debug for BrowserRequestContext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BrowserRequestContext")
+            .field("version", &self.version)
+            .field("method", &self.method)
+            .field("values", &"приховано")
+            .finish()
+    }
 }
 
 impl Session {
@@ -64,13 +126,14 @@ impl Session {
         Self {
             cookies: nonempty(cookies),
             referer: nonempty(referer),
+            context: None,
         }
     }
 
     /// Чи немає ні cookies, ні referer.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.cookies.is_none() && self.referer.is_none()
+        self.cookies.is_none() && self.referer.is_none() && self.context.is_none()
     }
 }
 
@@ -90,6 +153,7 @@ impl std::fmt::Debug for Session {
         f.debug_struct("Session")
             .field("cookies", &self.cookies.as_ref().map(|_| "задано"))
             .field("referer", &self.referer.as_ref().map(|_| "задано"))
+            .field("context", &self.context.as_ref().map(|_| "задано"))
             .finish()
     }
 }
@@ -240,12 +304,16 @@ pub struct RunContext {
 pub fn parse_duration(raw: &str) -> crate::error::Result<std::time::Duration> {
     let s = raw.trim();
     if s.is_empty() {
-        return Err(crate::error::Error::Store("порожній рядок тривалості".to_owned()));
+        return Err(crate::error::Error::Store(
+            "порожній рядок тривалості".to_owned(),
+        ));
     }
 
     if let Ok(secs) = s.parse::<u64>() {
         if secs == 0 {
-            return Err(crate::error::Error::Store(format!("тривалість має бути більшою за 0: '{s}'")));
+            return Err(crate::error::Error::Store(format!(
+                "тривалість має бути більшою за 0: '{s}'"
+            )));
         }
         return Ok(std::time::Duration::from_secs(secs));
     }
@@ -286,7 +354,9 @@ pub fn parse_duration(raw: &str) -> crate::error::Result<std::time::Duration> {
             current_num.push(ch);
         } else {
             if current_num.is_empty() {
-                return Err(crate::error::Error::Store(format!("некоректна тривалість: '{s}'")));
+                return Err(crate::error::Error::Store(format!(
+                    "некоректна тривалість: '{s}'"
+                )));
             }
             in_num = false;
             current_unit.push(ch);
@@ -301,11 +371,15 @@ pub fn parse_duration(raw: &str) -> crate::error::Result<std::time::Duration> {
         })?;
         total_secs = total_secs.saturating_add(val);
     } else {
-        return Err(crate::error::Error::Store(format!("некоректна тривалість: '{s}'")));
+        return Err(crate::error::Error::Store(format!(
+            "некоректна тривалість: '{s}'"
+        )));
     }
 
     if total_secs == 0 {
-        return Err(crate::error::Error::Store(format!("тривалість має бути більшою за 0: '{s}'")));
+        return Err(crate::error::Error::Store(format!(
+            "тривалість має бути більшою за 0: '{s}'"
+        )));
     }
 
     Ok(std::time::Duration::from_secs(total_secs))
@@ -666,7 +740,11 @@ mod tests {
     #[test]
     fn модуль_обирається_за_власним_рішенням_а_не_ядром() {
         let mut r = Registry::new();
-        r.register(Box::new(Пустушка::нова("вигадка", "вигадка://", 1)));
+        r.register(Box::new(Пустушка::нова(
+            "вигадка",
+            "вигадка://",
+            1,
+        )));
         r.register(Box::new(Пустушка::нова("інша", "інша://", 1)));
 
         assert_eq!(r.find("вигадка://щось").unwrap().name(), "вигадка");
@@ -682,8 +760,16 @@ mod tests {
         // Спеціалізовані модулі реєструються раніше за загальні: інакше
         // загальний забирав би все, що зовні схоже на його схему.
         let mut r = Registry::new();
-        r.register(Box::new(Пустушка::нова("спеціальний", "тест://особливе", 1)));
-        r.register(Box::new(Пустушка::нова("загальний", "тест://", 1)));
+        r.register(Box::new(Пустушка::нова(
+            "спеціальний",
+            "тест://особливе",
+            1,
+        )));
+        r.register(Box::new(Пустушка::нова(
+            "загальний",
+            "тест://",
+            1,
+        )));
 
         assert_eq!(
             r.find("тест://особливе/файл").unwrap().name(),
@@ -695,7 +781,11 @@ mod tests {
     #[test]
     fn модуль_знаходиться_за_імʼям_для_продовження_завдання() {
         let mut r = Registry::new();
-        r.register(Box::new(Пустушка::нова("вигадка", "вигадка://", 1)));
+        r.register(Box::new(Пустушка::нова(
+            "вигадка",
+            "вигадка://",
+            1,
+        )));
 
         assert!(r.by_name("вигадка").is_some());
         assert!(
@@ -869,6 +959,33 @@ mod tests {
     }
 
     #[test]
+    fn браузерний_контекст_відхиляє_підміну_методу_версії_та_службових_заголовків() {
+        let mut context = BrowserRequestContext {
+            version: 1,
+            source_url: "https://example.test/file".into(),
+            page_url: Some("https://example.test/page?token=private".into()),
+            method: "GET".into(),
+            user_agent: Some("Browser/1".into()),
+            headers: vec![],
+        };
+        assert!(context.validate(&context.source_url).is_ok());
+        assert!(!format!("{context:?}").contains("private"));
+        assert!(context.validate("https://other.test/file").is_err());
+        context.method = "POST".into();
+        assert!(context.validate(&context.source_url).is_err());
+        context.method = "GET".into();
+        context.version = 2;
+        assert!(context.validate(&context.source_url).is_err());
+        context.version = 1;
+        for name in ["Host", "Range", "Cookie", "Authorization", "Content-Length"] {
+            context.headers = vec![(name.into(), "secret".into())];
+            assert!(context.validate(&context.source_url).is_err());
+        }
+        context.headers = vec![("Origin".into(), "safe\r\nInjected: yes".into())];
+        assert!(context.validate(&context.source_url).is_err());
+    }
+
+    #[test]
     fn порожній_рядок_це_відсутня_сесія() {
         let s = Session::from_parts(Some("  ".to_owned()), Some(String::new()));
         assert!(s.is_empty());
@@ -894,20 +1011,50 @@ mod tests {
 
     #[test]
     fn parse_duration_розпізнає_секунди_хвилини_години() {
-        assert_eq!(parse_duration("30s").unwrap(), std::time::Duration::from_secs(30));
-        assert_eq!(parse_duration("10m").unwrap(), std::time::Duration::from_secs(600));
-        assert_eq!(parse_duration("1h").unwrap(), std::time::Duration::from_secs(3600));
-        assert_eq!(parse_duration("1h30m").unwrap(), std::time::Duration::from_secs(5400));
-        assert_eq!(parse_duration("10m30s").unwrap(), std::time::Duration::from_secs(630));
-        assert_eq!(parse_duration("90").unwrap(), std::time::Duration::from_secs(90));
+        assert_eq!(
+            parse_duration("30s").unwrap(),
+            std::time::Duration::from_secs(30)
+        );
+        assert_eq!(
+            parse_duration("10m").unwrap(),
+            std::time::Duration::from_secs(600)
+        );
+        assert_eq!(
+            parse_duration("1h").unwrap(),
+            std::time::Duration::from_secs(3600)
+        );
+        assert_eq!(
+            parse_duration("1h30m").unwrap(),
+            std::time::Duration::from_secs(5400)
+        );
+        assert_eq!(
+            parse_duration("10m30s").unwrap(),
+            std::time::Duration::from_secs(630)
+        );
+        assert_eq!(
+            parse_duration("90").unwrap(),
+            std::time::Duration::from_secs(90)
+        );
     }
 
     #[test]
     fn parse_duration_розпізнає_українські_суфікси() {
-        assert_eq!(parse_duration("45с").unwrap(), std::time::Duration::from_secs(45));
-        assert_eq!(parse_duration("10хв").unwrap(), std::time::Duration::from_secs(600));
-        assert_eq!(parse_duration("2год").unwrap(), std::time::Duration::from_secs(7200));
-        assert_eq!(parse_duration("1год15хв").unwrap(), std::time::Duration::from_secs(4500));
+        assert_eq!(
+            parse_duration("45с").unwrap(),
+            std::time::Duration::from_secs(45)
+        );
+        assert_eq!(
+            parse_duration("10хв").unwrap(),
+            std::time::Duration::from_secs(600)
+        );
+        assert_eq!(
+            parse_duration("2год").unwrap(),
+            std::time::Duration::from_secs(7200)
+        );
+        assert_eq!(
+            parse_duration("1год15хв").unwrap(),
+            std::time::Duration::from_secs(4500)
+        );
     }
 
     #[test]

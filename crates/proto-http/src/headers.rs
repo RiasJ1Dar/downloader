@@ -53,11 +53,13 @@ impl ContentRange {
         let (range, total) = rest.split_once('/')?;
         let (start, end) = range.trim().split_once('-')?;
 
-        let start = start.trim().parse().ok()?;
-        let end = end.trim().parse().ok()?;
+        let start: u64 = start.trim().parse().ok()?;
+        let end: u64 = end.trim().parse().ok()?;
         if end < start {
             return None;
         }
+        // Довжина включного діапазону теж мусить вміщатися в u64.
+        end.checked_sub(start)?.checked_add(1)?;
 
         let total = match total.trim() {
             "*" => None,
@@ -219,10 +221,7 @@ fn split_params(value: &str) -> Vec<String> {
     while i < chars.len() {
         let ch = chars[i];
 
-        if ch == '\\'
-            && in_quotes
-            && chars.get(i + 1).copied().is_some_and(is_escapable)
-        {
+        if ch == '\\' && in_quotes && chars.get(i + 1).copied().is_some_and(is_escapable) {
             // Екранована пара — переносимо обидва символи, знімемо в `unquote`.
             current.push(ch);
             current.push(chars[i + 1]);
@@ -248,10 +247,7 @@ fn split_params(value: &str) -> Vec<String> {
 /// Зняти лапки й екранування.
 fn unquote(raw: &str) -> String {
     let trimmed = raw.trim();
-    let Some(inner) = trimmed
-        .strip_prefix('"')
-        .and_then(|s| s.strip_suffix('"'))
-    else {
+    let Some(inner) = trimmed.strip_prefix('"').and_then(|s| s.strip_suffix('"')) else {
         return trimmed.to_owned();
     };
 
@@ -293,7 +289,11 @@ fn parse_ext_value(raw: &str) -> Option<String> {
     }
 
     let decoded = percent_decode(encoded);
-    if decoded.is_empty() { None } else { Some(decoded) }
+    if decoded.is_empty() {
+        None
+    } else {
+        Some(decoded)
+    }
 }
 
 /// Розкодувати `%XX`. Байти збираються, тоді тлумачаться як UTF-8.
@@ -323,7 +323,11 @@ fn percent_decode(input: &str) -> String {
 
 /// Лишити тільки базове ім'я: усе до останнього `/` або `\` — геть.
 fn base_name(name: &str) -> String {
-    name.rsplit(['/', '\\']).next().unwrap_or(name).trim().to_owned()
+    name.rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(name)
+        .trim()
+        .to_owned()
 }
 
 #[cfg(test)]
@@ -426,7 +430,10 @@ mod tests {
             "attachment; filename=\"file.zip\"; filename*=UTF-8''%D0%B7%D0%B2%D1%96%D1%82.zip",
         )
         .unwrap();
-        assert_eq!(name, "звіт.zip", "filename* має бути важливішим за filename");
+        assert_eq!(
+            name, "звіт.zip",
+            "filename* має бути важливішим за filename"
+        );
     }
 
     #[test]
@@ -450,10 +457,12 @@ mod tests {
 
     #[test]
     fn спроба_вийти_з_теки_обрізається_до_базового_імені() {
-        let name =
-            filename_from_disposition("attachment; filename=\"..\\..\\windows\\evil.exe\"")
-                .unwrap();
-        assert_eq!(name, "evil.exe", "шлях із заголовка не має вести за межі теки");
+        let name = filename_from_disposition("attachment; filename=\"..\\..\\windows\\evil.exe\"")
+            .unwrap();
+        assert_eq!(
+            name, "evil.exe",
+            "шлях із заголовка не має вести за межі теки"
+        );
 
         let unix = filename_from_disposition("attachment; filename=\"../../etc/passwd\"").unwrap();
         assert_eq!(unix, "passwd");
@@ -463,14 +472,15 @@ mod tests {
     fn літеральний_бекслеш_у_шляху_не_зʼїдається() {
         // Windows-сервер шле шлях без екранування — бекслеші мають дожити до
         // `base_name`, інакше різати буде нічого.
-        let name = filename_from_disposition("attachment; filename=\"C:\\temp\\звіт.pdf\"")
-            .unwrap();
+        let name =
+            filename_from_disposition("attachment; filename=\"C:\\temp\\звіт.pdf\"").unwrap();
         assert_eq!(name, "звіт.pdf");
     }
 
     #[test]
     fn екрановані_лапки_всередині_імені() {
-        let name = filename_from_disposition("attachment; filename=\"він \\\"той\\\".txt\"").unwrap();
+        let name =
+            filename_from_disposition("attachment; filename=\"він \\\"той\\\".txt\"").unwrap();
         assert_eq!(name, "він \"той\".txt");
     }
 

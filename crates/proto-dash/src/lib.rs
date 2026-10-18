@@ -843,19 +843,12 @@ fn абсолютний(base: &str, rel: &str) -> Result<String> {
     Ok(format!("{dir}{rel}"))
 }
 
-fn з_сесією(req: reqwest::RequestBuilder, session: &Session) -> reqwest::RequestBuilder {
-    let mut req = req;
-    if let Some(c) = session.cookies.as_deref() {
-        req = req.header(reqwest::header::COOKIE, c);
-    }
-    if let Some(r) = session.referer.as_deref() {
-        req = req.header(reqwest::header::REFERER, r);
-    }
-    req
+fn з_сесією(req: reqwest::RequestBuilder, session: &Session, url: &str) -> reqwest::RequestBuilder {
+    downloader_proto_http::probe::apply_session(req, session, url)
 }
 
 async fn fetch_text(client: &Client, url: &str, session: &Session) -> Result<String> {
-    let resp = з_сесією(client.get(url), session)
+    let resp = з_сесією(client.get(url), session, url)
         .send()
         .await
         .map_err(|e| Error::Store(format!("GET {url}: {e}")))?;
@@ -913,7 +906,7 @@ async fn fetch_segment_limited(
         if cancel.is_cancelled() {
             return Ok(Vec::new());
         }
-        let req = з_сесією(client.get(url), session);
+        let req = з_сесією(client.get(url), session, url);
         let resp = match req.send().await {
             Ok(r) => r,
             Err(e) => {

@@ -96,7 +96,13 @@ dl logs --path
 cargo build --workspace
 cargo test --workspace
 cargo clippy --workspace --all-targets
+node --test ext/tests/*.test.cjs
 ```
+
+Для браузерних тестів потрібен Node.js 22. Перед роботою виконуйте
+`git pull --ff-only`, після перевірок — звичайний `git push`. Якщо Git
+повідомляє про розходження, спершу звірте коміти; не переписуйте спільний
+`master` через force push чи повторне cherry-pick тих самих змін.
 
 Вікно (потрібен .NET 10 SDK):
 

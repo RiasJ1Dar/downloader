@@ -34,6 +34,7 @@
     "downloads",
     "nativeMessaging",
     "cookies",
+    "storage",
     "webRequest",
     "contextMenus"
   ],

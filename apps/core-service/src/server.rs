@@ -111,6 +111,35 @@ async fn handle(mut stream: Stream, engine: Arc<Engine>) -> anyhow::Result<()> {
 /// Виконати один запит.
 async fn dispatch(req: Request, engine: &Arc<Engine>) -> Response {
     match req {
+        Request::AddBrowser { url, context } => {
+            let browser = downloader_core::protocol::BrowserRequestContext {
+                version: context.version,
+                source_url: context.source_url,
+                page_url: context.page_url,
+                method: context.method,
+                user_agent: context.user_agent,
+                headers: context.headers,
+            };
+            if let Err(message) = browser.validate(&url) {
+                return Response::Error {
+                    code: ErrorCode::Internal,
+                    message,
+                };
+            }
+            let mut session =
+                downloader_core::protocol::Session::from_parts(context.cookies, context.referer);
+            session.context = Some(browser);
+            match engine
+                .add(&url, None, None, session, None, None, None, false)
+                .await
+            {
+                Ok(id) => Response::Added { id },
+                Err(error) => Response::Error {
+                    code: ErrorCode::Internal,
+                    message: error.to_string(),
+                },
+            }
+        }
         Request::Ping => Response::Ok,
 
         Request::List => Response::Tasks {
@@ -145,7 +174,10 @@ async fn dispatch(req: Request, engine: &Arc<Engine>) -> Response {
             rewind,
         } => {
             let session = downloader_core::protocol::Session::from_parts(cookies, referer);
-            let max_duration = match duration.as_deref().map(downloader_core::protocol::parse_duration) {
+            let max_duration = match duration
+                .as_deref()
+                .map(downloader_core::protocol::parse_duration)
+            {
                 Some(Ok(d)) => Some(d),
                 Some(Err(e)) => {
                     return Response::Error {
@@ -328,15 +360,13 @@ async fn dispatch(req: Request, engine: &Arc<Engine>) -> Response {
             },
         },
 
-        Request::MoveToQueue { id, queue } => {
-            match engine.move_task_to_queue(id, &queue) {
-                Ok(()) => Response::Ok,
-                Err(e) => Response::Error {
-                    code: ErrorCode::InvalidState,
-                    message: e.to_string(),
-                },
-            }
-        }
+        Request::MoveToQueue { id, queue } => match engine.move_task_to_queue(id, &queue) {
+            Ok(()) => Response::Ok,
+            Err(e) => Response::Error {
+                code: ErrorCode::InvalidState,
+                message: e.to_string(),
+            },
+        },
 
         Request::Hello { .. } => Response::Error {
             code: ErrorCode::InvalidState,

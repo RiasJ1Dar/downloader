@@ -12,6 +12,10 @@
 //! * **Один контракт.** Зовнішні плагіни-протоколи говоритимуть тим самим
 //!   протоколом, що й вікно, — а не другим, окремо вигаданим.
 
+// Ядро — фоновий процес. Підсистема GUI не створює console window навіть
+// при прямому запуску ярлика автозапуску; діагностика лишається в журналі.
+#![cfg_attr(all(windows, not(test)), windows_subsystem = "windows")]
+
 mod after;
 mod clipboard_watch;
 mod engine;
@@ -94,8 +98,8 @@ async fn запустити() -> anyhow::Result<()> {
     // профілі. Кілька перших рядків (розбір аргументів) через це в файл не
     // потрапляють — зате файл завжди лежить там, де його шукатиме людина.
     let шлях_журналу = downloader_winutil::zhurnal::файл_журналу(&data_dir);
-    let фільтр = tracing_subscriber::EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| "info".into());
+    let фільтр =
+        tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into());
     match downloader_winutil::zhurnal::Журнал::відкрити(&шлях_журналу) {
         Ok(журнал) => {
             use tracing_subscriber::fmt::writer::MakeWriterExt as _;
@@ -124,9 +128,12 @@ async fn запустити() -> anyhow::Result<()> {
     let downloads = cli
         .downloads
         .unwrap_or_else(|| downloader_winutil::downloads_dir_for_exe(exe.as_deref()));
-    std::fs::create_dir_all(&downloads)
-        .with_context(|| format!("не вдалося створити теку завантажень {}", downloads.display()))?;
-
+    std::fs::create_dir_all(&downloads).with_context(|| {
+        format!(
+            "не вдалося створити теку завантажень {}",
+            downloads.display()
+        )
+    })?;
 
     // ⚠️ Канал займається **до** відкриття бази й навмисно першим.
     //
@@ -172,7 +179,15 @@ async fn запустити() -> anyhow::Result<()> {
             "downloader-nmhost"
         });
         if host.is_file() {
-            match std::process::Command::new(&host).arg("--install").status() {
+            let mut command = std::process::Command::new(&host);
+            command.arg("--install");
+            #[cfg(windows)]
+            {
+                use std::os::windows::process::CommandExt as _;
+                // GUI-ядро не повинне породжувати консоль дочірнього host.
+                command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+            }
+            match command.status() {
                 Ok(st) if st.success() => {
                     tracing::info!("native host прописано для браузера");
                 }

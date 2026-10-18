@@ -22,6 +22,8 @@ struct FromExt {
     cookies: Option<String>,
     #[serde(default)]
     referer: Option<String>,
+    #[serde(default)]
+    context: Option<downloader_ipc::protocol::BrowserRequestContext>,
 }
 
 #[derive(Debug, Serialize)]
@@ -114,9 +116,15 @@ async fn додати_в_ядро(msg: FromExt) -> Result<i64> {
         Response::Error { message, .. } => bail!("ядро відмовило: {message}"),
         other => bail!("не hello: {other:?}"),
     }
-    write_frame(
-        &mut stream,
-        &Request::Add {
+    let request = if let Some(mut context) = msg.context {
+        context.cookies = msg.cookies;
+        context.referer = msg.referer;
+        Request::AddBrowser {
+            url: msg.url,
+            context: Box::new(context),
+        }
+    } else {
+        Request::Add {
             url: msg.url,
             dest: None,
             parts: None,
@@ -126,9 +134,9 @@ async fn додати_в_ядро(msg: FromExt) -> Result<i64> {
             queue: None,
             duration: None,
             rewind: false,
-        },
-    )
-    .await?;
+        }
+    };
+    write_frame(&mut stream, &request).await?;
     match read_frame::<_, Response>(&mut stream).await? {
         Response::Added { id } => Ok(id),
         Response::Error { message, .. } => bail!(message),
@@ -137,9 +145,22 @@ async fn додати_в_ядро(msg: FromExt) -> Result<i64> {
 }
 
 /// Chrome native messaging: u32 LE довжина, потім UTF-8 JSON.
-async fn читати_з_браузера(r: &mut (impl AsyncReadExt + Unpin)) -> io::Result<FromExt> {
+async fn читати_з_браузера(
+    r: &mut (impl AsyncReadExt + Unpin),
+) -> io::Result<FromExt> {
     let mut len = [0u8; 4];
-    r.read_exact(&mut len).await?;
+    if r.read(&mut len[..1]).await? == 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::UnexpectedEof,
+            "браузер закрив потік між кадрами",
+        ));
+    }
+    r.read_exact(&mut len[1..]).await.map_err(|e| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("префікс кадру браузера обірвався: {e}"),
+        )
+    })?;
     let n = u32::from_le_bytes(len) as usize;
     if n == 0 || n > 1024 * 1024 {
         return Err(io::Error::new(
@@ -148,11 +169,19 @@ async fn читати_з_браузера(r: &mut (impl AsyncReadExt + Unpin)) -
         ));
     }
     let mut buf = vec![0u8; n];
-    r.read_exact(&mut buf).await?;
+    r.read_exact(&mut buf).await.map_err(|e| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("кадр браузера обірвався до {n} bytes: {e}"),
+        )
+    })?;
     serde_json::from_slice(&buf).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
 }
 
-async fn писати_в_браузер(w: &mut (impl AsyncWriteExt + Unpin), msg: &ToExt) -> Result<()> {
+async fn писати_в_браузер(
+    w: &mut (impl AsyncWriteExt + Unpin),
+    msg: &ToExt,
+) -> Result<()> {
     let body = serde_json::to_vec(msg)?;
     let n = u32::try_from(body.len()).context("кадр завеликий")?;
     w.write_all(&n.to_le_bytes()).await?;
@@ -229,11 +258,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn обірваний_кадр_не_маскується_під_нормальний_eof() {
+        for bytes in [vec![4, 0], vec![4, 0, 0, 0, b'{']] {
+            let err = читати_з_браузера(&mut std::io::Cursor::new(bytes))
+                .await
+                .unwrap_err();
+            assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+        }
+        let err = читати_з_браузера(&mut std::io::Cursor::new(Vec::<u8>::new()))
+            .await
+            .unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::UnexpectedEof);
+    }
+
+    #[test]
+    fn контекст_браузера_читається_без_зміни_старого_контракту() {
+        let msg: FromExt = serde_json::from_str(r#"{"url":"https://site.test/file","context":{"version":1,"source_url":"https://site.test/file","method":"GET","user_agent":"Browser/1","headers":[["Accept-Language","uk"]]}}"#).unwrap();
+        let context = msg.context.unwrap();
+        assert_eq!(context.user_agent.as_deref(), Some("Browser/1"));
+        assert_eq!(context.headers.len(), 1);
+        assert!(!format!("{context:?}").contains("Browser/1"));
+    }
+
+    #[tokio::test]
     async fn обробка_некоректної_url_повертає_помилку() {
         let msg = FromExt {
             url: "ftp://files.example/a.zip".to_string(),
             cookies: None,
             referer: None,
+            context: None,
         };
         let res = обробити(msg).await;
         assert!(!res.ok);

@@ -6,22 +6,57 @@
 //! пише `Accept-Ranges: bytes`, може віддати `200` на реальний запит.
 //! Тому останнє слово завжди за пробним запитом, а не за заголовком.
 
-use crate::headers::{ContentRange, RangeSupport, Validator, filename_from_disposition,
-    filename_from_url};
+use crate::headers::{
+    ContentRange, RangeSupport, Validator, filename_from_disposition, filename_from_url,
+};
 use downloader_core::protocol::Session;
+use futures_util::StreamExt as _;
 use reqwest::header::{
-    ACCEPT_RANGES, CONTENT_DISPOSITION, CONTENT_LENGTH, CONTENT_RANGE, COOKIE, ETAG, HeaderMap,
-    LAST_MODIFIED, RANGE, REFERER,
+    ACCEPT_ENCODING, ACCEPT_RANGES, CONTENT_DISPOSITION, CONTENT_LENGTH, CONTENT_RANGE, COOKIE,
+    ETAG, HeaderMap, LAST_MODIFIED, RANGE, REFERER,
 };
 use reqwest::{Client, RequestBuilder, StatusCode};
 
 /// Накласти Cookie / Referer на запит. Порожня сесія нічого не змінює.
-pub fn apply_session(mut req: RequestBuilder, session: &Session) -> RequestBuilder {
-    if let Some(c) = session.cookies.as_deref() {
+pub fn apply_session(mut req: RequestBuilder, session: &Session, url: &str) -> RequestBuilder {
+    let same_origin = session.context.as_ref().is_none_or(|context| {
+        match (
+            reqwest::Url::parse(&context.source_url),
+            reqwest::Url::parse(url),
+        ) {
+            (Ok(source), Ok(target)) => source.origin() == target.origin(),
+            _ => false,
+        }
+    });
+    if same_origin && let Some(c) = session.cookies.as_deref() {
         req = req.header(COOKIE, c);
     }
     if let Some(r) = session.referer.as_deref() {
-        req = req.header(REFERER, r);
+        if same_origin {
+            req = req.header(REFERER, r);
+        } else if let Ok(referer) = reqwest::Url::parse(r) {
+            // Новому origin не передаємо приватний шлях/запит сторінки.
+            req = req.header(
+                REFERER,
+                format!("{}/", referer.origin().ascii_serialization()),
+            );
+        }
+    }
+    if let Some(context) = &session.context {
+        if let Some(ua) = &context.user_agent {
+            req = req.header(reqwest::header::USER_AGENT, ua);
+        }
+        if same_origin {
+            for (name, value) in &context.headers {
+                // Другий запобіжник для callers, які обійшли IPC validation.
+                if ["accept", "accept-language", "origin"]
+                    .iter()
+                    .any(|n| name.eq_ignore_ascii_case(n))
+                {
+                    req = req.header(name, value);
+                }
+            }
+        }
     }
     req
 }
@@ -86,6 +121,9 @@ pub enum ProbeError {
         #[source]
         source: reqwest::Error,
     },
+
+    #[error("сервер віддав неправильну пробу Range для {url}: {detail}")]
+    InvalidRange { url: String, detail: String },
 }
 
 /// Дізнатись усе, що можна, до першого записаного байта.
@@ -149,22 +187,21 @@ const fn is_temporary(err: &ProbeError) -> bool {
         // Обрив на першому ж запиті часто означає перевантажений сервер,
         // а не мертвий URL.
         ProbeError::Network { .. } => true,
+        ProbeError::InvalidRange { .. } => false,
     }
 }
 
-async fn probe_once(
-    client: &Client,
-    url: &str,
-    session: &Session,
-) -> Result<Probe, ProbeError> {
+async fn probe_once(client: &Client, url: &str, session: &Session) -> Result<Probe, ProbeError> {
     if let Some(probe) = try_head(client, url, session).await? {
         // `HEAD` не доводить `Range` — сервер міг збрехати. Якщо він заявив
         // підтримку, перевіряємо пробним байтом; якщо промовчав — тим паче.
-        if probe.declared != RangeSupport::None
-            && probe.size.is_some_and(|s| s > 1)
-            && let Ok(ranged) = try_ranged_get(client, url, session).await
-        {
-            return Ok(merge(probe, ranged));
+        if probe.declared != RangeSupport::None && probe.size.is_some_and(|s| s > 1) {
+            match try_ranged_get(client, url, session).await {
+                Ok(ranged) => return Ok(merge(probe, ranged)),
+                Err(error) => {
+                    tracing::warn!(%error, "Range не підтверджено, качатиму одним потоком")
+                }
+            }
         }
         return Ok(probe);
     }
@@ -178,7 +215,7 @@ async fn try_head(
     url: &str,
     session: &Session,
 ) -> Result<Option<Probe>, ProbeError> {
-    let resp = apply_session(client.head(url), session)
+    let resp = apply_session(client.head(url), session, url)
         .send()
         .await
         .map_err(|source| ProbeError::Network {
@@ -217,7 +254,8 @@ async fn try_ranged_get(
     url: &str,
     session: &Session,
 ) -> Result<Probe, ProbeError> {
-    let resp = apply_session(client.get(url), session)
+    let resp = apply_session(client.get(url), session, url)
+        .header(ACCEPT_ENCODING, "identity")
         .header(RANGE, "bytes=0-0")
         .send()
         .await
@@ -238,22 +276,54 @@ async fn try_ranged_get(
     let headers = resp.headers().clone();
 
     // `206` + зрозумілий `Content-Range` — єдиний доказ, який ми приймаємо.
-    let (size, resumable) = if status == StatusCode::PARTIAL_CONTENT {
-        match headers
-            .get(CONTENT_RANGE)
-            .and_then(|v| v.to_str().ok())
-            .and_then(ContentRange::parse)
-        {
-            Some(cr) => (cr.total, true),
-            // `206` без розбірливого `Content-Range` — сервер поводиться
-            // дивно. Краще один потік, ніж записати байти не туди.
-            None => (content_length(&headers), false),
-        }
-    } else {
-        // `200` у відповідь на `Range` означає «діапазони я ігнорую».
-        // `Content-Length` тут — розмір усього файла.
-        (content_length(&headers), false)
-    };
+    let (size, resumable) =
+        if status == StatusCode::PARTIAL_CONTENT {
+            match headers
+                .get(CONTENT_RANGE)
+                .and_then(|v| v.to_str().ok())
+                .and_then(ContentRange::parse)
+            {
+                Some(cr) if cr.start == 0 && cr.end == 0 && cr.total.is_some() => {
+                    if headers.get(CONTENT_LENGTH).is_some_and(|h| h != "1") {
+                        return Err(ProbeError::InvalidRange {
+                            url: final_url,
+                            detail: "на bytes=0-0 очікується Content-Length: 1".into(),
+                        });
+                    }
+                    let mut stream = resp.bytes_stream();
+                    let mut received = 0usize;
+                    while let Some(chunk) = stream.next().await {
+                        let chunk = chunk.map_err(|source| ProbeError::Network {
+                            url: final_url.clone(),
+                            source,
+                        })?;
+                        received = received.saturating_add(chunk.len());
+                        if received > 1 {
+                            break;
+                        }
+                    }
+                    if received != 1 {
+                        return Err(ProbeError::InvalidRange {
+                            url: final_url,
+                            detail: format!("на bytes=0-0 отримано {received} bytes замість 1"),
+                        });
+                    }
+                    (cr.total, true)
+                }
+                // `206` без розбірливого `Content-Range` — сервер поводиться
+                // дивно. Краще один потік, ніж записати байти не туди.
+                _ => return Err(ProbeError::InvalidRange {
+                    url: final_url,
+                    detail:
+                        "відповідь 206 не відповідає пробі bytes=0-0 або не називає повний розмір"
+                            .into(),
+                }),
+            }
+        } else {
+            // `200` у відповідь на `Range` означає «діапазони я ігнорую».
+            // `Content-Length` тут — розмір усього файла.
+            (content_length(&headers), false)
+        };
 
     Ok(Probe {
         size,

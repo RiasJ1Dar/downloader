@@ -121,6 +121,72 @@ fn sha256_of(path: &PathBuf) -> anyhow::Result<String> {
 }
 
 #[tokio::test]
+async fn браузерний_контекст_проходить_ipc_до_авторизованого_завантаження() -> anyhow::Result<()> {
+    let server = EvilServer::start().await?;
+    let ядро = Ядро::запустити("browser-context")?;
+    let mut client = ядро.дочекатись().await?;
+    привітатись(&mut client).await?;
+    let mut слухач = connect_to(&ядро.pipe).await?;
+    привітатись(&mut слухач).await?;
+    write_frame(&mut слухач, &Request::Subscribe).await?;
+    let _: Response = read_frame(&mut слухач).await?;
+    let url = server.url("/auth/16k");
+    let context = downloader_ipc::protocol::BrowserRequestContext {
+        version: 1,
+        source_url: url.clone(),
+        page_url: Some("http://example.test/page".into()),
+        method: "GET".into(),
+        user_agent: Some("Browser-E2E/1".into()),
+        headers: vec![("Accept-Language".into(), "uk".into())],
+        cookies: Some("session=ok".into()),
+        referer: Some("http://example.test/page".into()),
+    };
+    let mut invalid = context.clone();
+    invalid.version = 2;
+    write_frame(
+        &mut client,
+        &Request::AddBrowser {
+            url: url.clone(),
+            context: Box::new(invalid),
+        },
+    )
+    .await?;
+    assert!(matches!(
+        read_frame::<_, Response>(&mut client).await?,
+        Response::Error { .. }
+    ));
+    write_frame(
+        &mut client,
+        &Request::AddBrowser {
+            url,
+            context: Box::new(context),
+        },
+    )
+    .await?;
+    let id = match read_frame::<_, Response>(&mut client).await? {
+        Response::Added { id } => id,
+        other => anyhow::bail!("браузерне завдання не прийнято: {other:?}"),
+    };
+    let bytes = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            match read_frame::<_, Event>(&mut слухач).await? {
+                Event::Finished {
+                    id: done, bytes, ..
+                } if done == id => return Ok::<_, anyhow::Error>(bytes),
+                Event::Failed { message, .. } => {
+                    anyhow::bail!("браузерне завдання впало: {message}")
+                }
+                _ => {}
+            }
+        }
+    })
+    .await??;
+    assert_eq!(bytes, 16 * 1024);
+    server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test]
 async fn ядро_качає_файл_на_запит_клієнта() -> anyhow::Result<()> {
     let server = EvilServer::start().await?;
     let ядро = Ядро::запустити("download")?;
@@ -163,7 +229,9 @@ async fn ядро_качає_файл_на_запит_клієнта() -> anyhow
     let finished = tokio::time::timeout(Duration::from_secs(30), async {
         loop {
             match read_frame::<_, Event>(&mut слухач).await {
-                Ok(Event::Finished { id: done, bytes, .. }) if done == id => return Ok(bytes),
+                Ok(Event::Finished {
+                    id: done, bytes, ..
+                }) if done == id => return Ok(bytes),
                 Ok(Event::Failed { message, .. }) => {
                     anyhow::bail!("завдання впало: {message}")
                 }
@@ -815,7 +883,6 @@ async fn звичайний_режим_створює_базу_у_localappdata()
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
 
-
     let _ = child.kill();
     let _ = child.wait();
 
@@ -835,5 +902,3 @@ async fn звичайний_режим_створює_базу_у_localappdata()
 
     Ok(())
 }
-
-

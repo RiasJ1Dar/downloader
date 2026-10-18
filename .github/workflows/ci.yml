@@ -9,6 +9,11 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: браузерна передача та вибір медіа
+        run: node --test ext/tests/*.test.cjs
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy

@@ -1,0 +1,12 @@
+<!doctype html>
+<html lang="uk"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Downloader — перевірка вибору медіа</title>
+<style>body{margin:24px;background:#17202b;color:#fff;font:16px/1.5 system-ui}video{display:block;width:min(640px,100%);aspect-ratio:16/9;background:#05080c}h1{font-size:22px}</style>
+<h1>Перевірка кнопки Downloader</h1><p>Два медіапотоки в одному frame.</p><video controls></video>
+<script>
+const labels={btnDownload:'Завантажити',btnSending:'Передаю…',mediaChoice:'Оберіть медіапотік',downloadAdded:'Додано в Downloader',downloadFailed:'Не вдалося передати. Спробуйте ще раз.'};
+window.chrome={i18n:{getMessage:key=>labels[key]||''},runtime:{sendMessage:(msg,callback)=>{
+  if(msg.op==='manifest_detected'){callback?.({ok:true});return;}
+  setTimeout(()=>callback(new URLSearchParams(location.search).has('error')?{ok:false,error:'Ядро не запущене. Запустіть Downloader і повторіть передачу.'}:msg.choice?{ok:true,id:42}:{ok:false,candidates:[{url:'https://cdn.example/video/main.m3u8',type:'HLS'},{url:'https://cdn.example/video/alternate.mpd',type:'DASH'}]}),150);
+}}};
+</script><script src="/content.js"></script></html>
