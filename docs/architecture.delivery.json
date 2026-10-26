@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "17c9c9c4-f67e-4336-b117-22f0696eb15d",
+  "status": "current",
+  "command": "deliver",
+  "type": "architecture",
+  "input": "C:\\Users\\Public\\archify-20261026\\downloader\\.archify\\architecture-downloader-20261026-210000\\candidate.json",
+  "output": "C:\\Users\\Public\\archify-20261026\\downloader\\docs\\architecture.html",
+  "specification": {
+    "sha256": "ecf5a133a51946571bb88fe765e0b5fa643a06209b0114b22c9afb56c4ea2282",
+    "bytes": 8659
+  },
+  "artifact": {
+    "sha256": "d611832676ff41c343bb3b4a57ff57b030eb40e2b01c185f8658e3aa48eeeaaa",
+    "bytes": 842013
+  }
+}
